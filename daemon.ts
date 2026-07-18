@@ -201,13 +201,13 @@ async function handle(req: Request): Promise<Response> {
     if (path === '/send' && req.method === 'POST') {
       const body = (await req.json()) as {
         handle: string; text: string; buttons?: Button[]; reply_to?: string
-        format?: 'text' | 'markdown' | 'markdownv2' | 'rich'
+        format?: 'text' | 'markdown' | 'markdownv2' | 'rich'; message_thread_id?: number
       }
       const s = sessions.get(body.handle)
       if (!s) return json({ error: 'unknown handle' }, 404)
       s.lastActive = Date.now()
       lastSendHandle = body.handle
-      const ids = await sendToUser(body.handle, body.text, body.buttons, body.reply_to, body.format)
+      const ids = await sendToUser(body.handle, body.text, body.buttons, body.reply_to, body.format, body.message_thread_id)
       return json({ message_ids: ids })
     }
 
@@ -290,12 +290,14 @@ async function sendChunk(
 async function deliverClassic(
   chatId: string, text: string, parse_mode: 'MarkdownV2' | undefined,
   kb: InlineKeyboard | undefined, replyExtra: Record<string, unknown>,
+  threadExtra: Record<string, unknown> = {},
 ): Promise<string[]> {
   const chunks = chunk(text, CHUNK_LIMIT)
   const ids: string[] = []
   for (let i = 0; i < chunks.length; i++) {
     const isLast = i === chunks.length - 1
     ids.push(await sendChunk(chatId, chunks[i], parse_mode, {
+      ...threadExtra, // every chunk must carry the thread id, not just the first
       ...(i === 0 ? replyExtra : {}),
       ...(isLast && kb ? { reply_markup: kb } : {}),
     }))
@@ -309,22 +311,23 @@ async function deliverClassic(
 // MarkdownV2 (still formatted) and finally plain — the message always lands.
 async function deliverToChat(
   chatId: string, text: string, format: Fmt | undefined,
-  kb: InlineKeyboard | undefined, reply_to?: string,
+  kb: InlineKeyboard | undefined, reply_to?: string, threadId?: number,
 ): Promise<string[]> {
   const replyExtra = reply_to ? { reply_parameters: { message_id: Number(reply_to) } } : {}
+  const threadExtra = threadId ? { message_thread_id: threadId } : {}
   if (isRich(format)) {
     try {
       const sent = await bot.api.sendRichMessage(chatId, { markdown: text }, {
-        ...replyExtra, ...(kb ? { reply_markup: kb } : {}),
+        ...replyExtra, ...threadExtra, ...(kb ? { reply_markup: kb } : {}),
       })
       return [String(sent.message_id)]
     } catch (err) {
       logInbound({ kind: 'rich:fallback', error: String(err).slice(0, 140) })
-      return deliverClassic(chatId, toMarkdownV2(text), 'MarkdownV2', kb, replyExtra)
+      return deliverClassic(chatId, toMarkdownV2(text), 'MarkdownV2', kb, replyExtra, threadExtra)
     }
   }
   const parse_mode = format === 'markdownv2' ? ('MarkdownV2' as const) : undefined
-  return deliverClassic(chatId, text, parse_mode, kb, replyExtra)
+  return deliverClassic(chatId, text, parse_mode, kb, replyExtra, threadExtra)
 }
 
 // Edit in place, mirroring send's rich-first-with-fallback. Used for streaming
@@ -360,12 +363,12 @@ async function editMessage(
 
 async function sendToUser(
   handle: string, text: string, buttons?: Button[], reply_to?: string,
-  format?: Fmt,
+  format?: Fmt, threadId?: number,
 ): Promise<string[]> {
   const kb = buttons?.length ? buildKeyboard(handle, buttons) : undefined
   const ids: string[] = []
   for (const chatId of loadAllowFrom()) {
-    const chatIds = await deliverToChat(chatId, text, format, kb, reply_to)
+    const chatIds = await deliverToChat(chatId, text, format, kb, reply_to, threadId)
     for (const id of chatIds) msgToHandle.set(id, handle)
     const last = chatIds[chatIds.length - 1]
     if (last && buttons?.length) {
