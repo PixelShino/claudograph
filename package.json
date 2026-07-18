@@ -1,9 +1,11 @@
 {
-  "name": "tg-bridge",
+  "name": "claudograph",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Multi-session Telegram bridge for Claude Code: one bot, real inline buttons, N sessions routed without collision.",
+  "description": "Drive your Claude Code sessions from Telegram: one bot, many tabs, native rich messages, threads, screenshots.",
+  "license": "MIT",
+  "homepage": "https://github.com/PixelShino/claudograph",
   "scripts": {
     "daemon": "bun daemon.ts",
     "mcp": "bun session-mcp.ts"
