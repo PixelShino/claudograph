@@ -24,6 +24,7 @@ import {
   loadToken, loadAllowFrom, ensureSecret,
   chunk, CALLBACK_MAX, CHUNK_LIMIT,
   HOST, PORT, DAEMON_PID, INBOX_DIR,
+  readThreads, writeThreads,
   type PollEvent, type Button,
 } from './shared.ts'
 
@@ -155,6 +156,33 @@ async function handle(req: Request): Promise<Response> {
       const { handle: h } = (await req.json()) as { handle: string }
       sessions.delete(h)
       return json({ ok: true })
+    }
+
+    if (path === '/ensure-thread' && req.method === 'POST') {
+      // Create-or-reuse the forum topic for a tab label. Only the daemon owns
+      // the Bot API and threads.json, so allocation happens here (session-mcp
+      // calls this once on startup). On any Bot API failure (Threaded Mode off,
+      // not a forum) we return no thread_id so the caller falls back to flat chat.
+      const { label } = (await req.json()) as { label: string }
+      const threads = readThreads()
+      const existing = threads[label]
+      if (existing) {
+        existing.status = 'active'; existing.ts = Date.now()
+        threads[label] = existing; writeThreads(threads)
+        return json({ thread_id: existing.thread_id })
+      }
+      const chat = loadAllowFrom()[0]
+      if (!chat) return json({ error: 'no allow-listed chat' }, 400)
+      const name = `🟢 ${label}`
+      try {
+        const topic = await bot.api.createForumTopic(chat, name)
+        threads[label] = { thread_id: topic.message_thread_id, name, status: 'active', ts: Date.now() }
+        writeThreads(threads)
+        return json({ thread_id: topic.message_thread_id })
+      } catch (err) {
+        logInbound({ kind: 'ensure-thread:fail', label, error: String(err).slice(0, 140) })
+        return json({ error: 'thread unavailable' }, 200)
+      }
     }
 
     if (path === '/poll') {
