@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
+import re
 import sys
 import time
 import urllib.error
@@ -26,8 +28,11 @@ HOME = Path.home()
 TG_DIR = HOME / ".claude" / "channels" / "telegram"
 LOG = HOME / ".claude" / "tg-bridge" / "state" / "stop-notify.log"
 FULL_AUTO = HOME / ".claude" / "state" / "full-auto.json"  # armed by the my-full-auto skill
-LIMIT = 900  # Telegram hard limit is 4096; a phone ping wants a gist, not a wall.
 ATTEMPTS = 3  # the VPN drops TLS at random; one shot silently loses the ping
+THREADS_FILE = HOME / ".claude" / "tg-bridge" / "state" / "threads.json"
+PLAIN_LIMIT = 4096  # Telegram plain-send hard cap (a native Rich Message holds 32768)
+SUMMARY_SHORT = 600  # answers at most this long show whole; longer -> summary + <details>
+_TG_MARKER = re.compile(r"<!--\s*tg:\s*(.*?)\s*-->", re.S)
 
 
 def _token() -> str:
@@ -45,6 +50,48 @@ def _chats() -> list[str]:
 def _blocks(rec: dict) -> list[dict]:
     content = (rec.get("message") or {}).get("content")
     return [b for b in content if isinstance(b, dict)] if isinstance(content, list) else []
+
+
+def _label(payload: dict) -> str:
+    """This tab's stable key — same rule session-mcp uses, so they agree on a thread."""
+    env = (os.environ.get("TG_BRIDGE_LABEL") or "").strip()
+    return env or Path(payload.get("cwd") or ".").name
+
+
+def _thread_id(label: str):
+    """The tab's message_thread_id from threads.json (daemon-written), or None."""
+    try:
+        t = json.loads(THREADS_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    rec = t.get(label)
+    return rec.get("thread_id") if isinstance(rec, dict) else None
+
+
+def _split_summary(answer: str):
+    """Return (visible_summary, details_or_None).
+
+    An explicit `<!-- tg: … -->` marker is the summary (details = everything else).
+    Without a marker: short answers show whole (no details); long answers show the
+    first paragraph (skipping a leading heading) as the summary and the full body
+    under <details>. Never truncates mid-word.
+    """
+    m = _TG_MARKER.search(answer)
+    body = _TG_MARKER.sub("", answer).strip()
+    if m:
+        return m.group(1).strip(), (body or None)
+    if len(body) <= SUMMARY_SHORT:
+        return body, None
+    lines = body.split("\n")
+    i = 0
+    while i < len(lines) and lines[i].lstrip().startswith("#"):
+        i += 1  # skip a leading markdown heading line
+    para = []
+    while i < len(lines) and lines[i].strip():
+        para.append(lines[i].strip())
+        i += 1
+    summary = " ".join(para).strip() or body[:SUMMARY_SHORT]
+    return summary, body
 
 
 def _turn_start(records: list[dict]) -> int:
@@ -152,17 +199,21 @@ def main() -> None:
         _log("skip: empty answer")
         return
 
-    tab = Path(payload.get("cwd") or ".").name
-    body = answer if len(answer) <= LIMIT else answer[:LIMIT].rstrip() + " […]"
+    tab = _label(payload)
+    tid = _thread_id(tab)
+    summary, details = _split_summary(answer)
+    body = summary
+    if details:
+        body = f"{summary}\n\n<details><summary>Подробнее</summary>\n\n{details}\n</details>"
     text = f"claude · {tab}\n\n{body}"
 
     token = _token()
     for chat in _chats():
-        _send(token, chat, text)
-    _log(f"sent {len(body)} chars to {len(_chats())} chat(s)")
+        _send(token, chat, text, tid)
+    _log(f"sent to thread={tid} ({len(_chats())} chat(s), {len(text)} chars)")
 
 
-def _send(token: str, chat: str, text: str) -> None:
+def _send(token: str, chat: str, text: str, thread_id=None) -> None:
     """Deliver one message, retrying transient network failures.
 
     «В 100% случаев» is the whole point of this hook, and a single attempt does not
@@ -176,11 +227,14 @@ def _send(token: str, chat: str, text: str) -> None:
     # the rich payload (bad markdown / old server → HTTPError), fall back to a plain
     # `sendMessage` so delivery still hits «в 100% случаев». Connection errors are
     # retried; a deterministic 400 moves straight to the next method.
+    # `thread_id` (when set) puts the message in this tab's native topic.
+    thread_extra = {"message_thread_id": thread_id} if thread_id else {}
+    plain_text = text if len(text) <= PLAIN_LIMIT else text[:PLAIN_LIMIT].rstrip() + " […]"
     methods = (
         ("sendRichMessage", {"chat_id": chat, "rich_message": {"markdown": text},
-                             "disable_notification": False}),
-        ("sendMessage", {"chat_id": chat, "text": text,
-                         "disable_notification": False}),
+                             "disable_notification": False, **thread_extra}),
+        ("sendMessage", {"chat_id": chat, "text": plain_text,
+                         "disable_notification": False, **thread_extra}),
     )
     for i, (method, body) in enumerate(methods):
         last = i == len(methods) - 1
