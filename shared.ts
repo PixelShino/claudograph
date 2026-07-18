@@ -6,9 +6,9 @@
  * replaces the plugin's poller.
  */
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs'
+import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync } from 'fs'
 import { homedir } from 'os'
-import { join } from 'path'
+import { join, basename } from 'path'
 import { randomBytes } from 'crypto'
 
 export const HOME = homedir()
@@ -71,6 +71,39 @@ export function ensureSecret(): string {
 
 export function readSecret(): string {
   return readFileSync(SECRET_FILE, 'utf8').trim()
+}
+
+// --- native-thread state (tab label -> Telegram forum topic) --------------
+// Written ONLY by the daemon (atomic temp+rename); the Python hooks read it to
+// learn which message_thread_id a tab's messages belong in. Keyed by the tab's
+// label, which both session-mcp and the hooks compute identically (see labelKey).
+
+export const THREADS_FILE = join(STATE_DIR, 'threads.json')
+
+export type ThreadStatus = 'active' | 'idle'
+export type ThreadRecord = { thread_id: number; name: string; status: ThreadStatus; ts: number }
+export type ThreadsFile = Record<string, ThreadRecord>
+
+/** A tab's stable key: explicit TG_BRIDGE_LABEL, else the cwd's basename.
+ *  session-mcp and the hooks MUST derive this the same way to agree on a thread. */
+export function labelKey(cwd: string, envLabel?: string): string {
+  const e = (envLabel ?? '').trim()
+  return e || basename(cwd)
+}
+
+export function readThreads(): ThreadsFile {
+  try {
+    return JSON.parse(readFileSync(THREADS_FILE, 'utf8')) as ThreadsFile
+  } catch {
+    return {} // missing or corrupt -> empty; a bad file must never crash a send
+  }
+}
+
+export function writeThreads(t: ThreadsFile): void {
+  mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
+  const tmp = THREADS_FILE + '.tmp'
+  writeFileSync(tmp, JSON.stringify(t, null, 2), { mode: 0o600 })
+  renameSync(tmp, THREADS_FILE)
 }
 
 // --- text chunking (paragraph-aware, mirrors the plugin) ------------------
