@@ -14,7 +14,7 @@
  *    reply falls back to the most-recently-active session, flagged ambiguous.
  */
 
-import { Bot, GrammyError, InlineKeyboard } from 'grammy'
+import { Bot, GrammyError, InlineKeyboard, InputFile } from 'grammy'
 import type { Context } from 'grammy'
 import type { ReactionTypeEmoji } from 'grammy/types'
 import { writeFileSync, rmSync, mkdirSync } from 'fs'
@@ -242,6 +242,29 @@ async function handle(req: Request): Promise<Response> {
       // Explicit format='text' still sends plain.
       const fmt = body.format ?? 'markdown'
       const ids = await sendToUser(body.handle, body.text, body.buttons, body.reply_to, fmt, body.message_thread_id)
+      return json({ message_ids: ids })
+    }
+
+    if (path === '/send-photo' && req.method === 'POST') {
+      // Send a local image (e.g. a screenshot) to Telegram. `path` is a file on
+      // THIS machine — daemon and session-mcp are co-located, so a path is enough,
+      // no upload dance. Lands in the tab's thread when message_thread_id is given.
+      const body = (await req.json()) as {
+        handle: string; path: string; caption?: string; message_thread_id?: number
+      }
+      const s = sessions.get(body.handle)
+      if (!s) return json({ error: 'unknown handle' }, 404)
+      s.lastActive = Date.now()
+      const threadExtra = body.message_thread_id ? { message_thread_id: body.message_thread_id } : {}
+      const ids: string[] = []
+      for (const chatId of loadAllowFrom()) {
+        const sent = await bot.api.sendPhoto(chatId, new InputFile(body.path), {
+          ...(body.caption ? { caption: body.caption } : {}), ...threadExtra,
+        })
+        ids.push(String(sent.message_id))
+        msgToHandle.set(String(sent.message_id), body.handle)
+      }
+      trim(msgToHandle)
       return json({ message_ids: ids })
     }
 

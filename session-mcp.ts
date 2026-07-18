@@ -173,6 +173,19 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ['name'],
       },
     },
+    {
+      name: 'send_photo',
+      description:
+        'Send an image (e.g. a screenshot you just captured) to the user in Telegram. `path` is a local file path on this machine; optional `caption`. Lands in this tab\'s topic.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Local file path to the image.' },
+          caption: { type: 'string', description: 'Optional caption under the image.' },
+        },
+        required: ['path'],
+      },
+    },
   ],
 }))
 
@@ -194,6 +207,11 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
       case 'rename_thread':
         await api('/rename-thread', { label: LABEL, name: String(args.name ?? '') })
         return { content: [{ type: 'text', text: `topic renamed to ${args.name}` }] }
+      case 'send_photo': {
+        const res = await api('/send-photo', { handle, ...args, ...(threadId ? { message_thread_id: threadId } : {}) })
+        const ids: string[] = res.message_ids ?? []
+        return { content: [{ type: 'text', text: `photo sent (ids: ${ids.join(', ')})` }] }
+      }
       default:
         return { content: [{ type: 'text', text: `unknown tool: ${req.params.name}` }], isError: true }
     }
