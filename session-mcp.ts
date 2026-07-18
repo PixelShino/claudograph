@@ -65,6 +65,7 @@ async function ensureDaemon(): Promise<void> {
 
 let SECRET = ''
 let handle = ''
+let threadId: number | undefined // this tab's Telegram topic; undefined = flat chat
 
 async function api(path: string, body: unknown): Promise<any> {
   const r = await fetch(`${BASE_URL}${path}`, {
@@ -162,6 +163,16 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ['message_id', 'emoji'],
       },
     },
+    {
+      name: 'rename_thread',
+      description:
+        "Rename THIS tab's Telegram topic (thread). Use when the user asks to name/label this tab, e.g. rename_thread({ name: 'чат' }). No-op if Threaded Mode is off.",
+      inputSchema: {
+        type: 'object',
+        properties: { name: { type: 'string' } },
+        required: ['name'],
+      },
+    },
   ],
 }))
 
@@ -170,16 +181,19 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
   try {
     switch (req.params.name) {
       case 'send': {
-        const res = await api('/send', { handle, ...args })
+        const res = await api('/send', { handle, ...args, ...(threadId ? { message_thread_id: threadId } : {}) })
         const ids: string[] = res.message_ids ?? []
         return { content: [{ type: 'text', text: `sent (ids: ${ids.join(', ')})` }] }
       }
       case 'edit':
-        await api('/edit', { handle, ...args })
+        await api('/edit', { handle, ...args, ...(threadId ? { message_thread_id: threadId } : {}) })
         return { content: [{ type: 'text', text: 'edited' }] }
       case 'react':
         await api('/react', { handle, ...args })
         return { content: [{ type: 'text', text: 'reacted' }] }
+      case 'rename_thread':
+        await api('/rename-thread', { label: LABEL, name: String(args.name ?? '') })
+        return { content: [{ type: 'text', text: `topic renamed to ${args.name}` }] }
       default:
         return { content: [{ type: 'text', text: `unknown tool: ${req.params.name}` }], isError: true }
     }
@@ -259,6 +273,12 @@ async function connect(): Promise<void> {
   SECRET = readSecret()
   handle = (await api('/register', { label: LABEL })).handle
   process.stderr.write(`tg-bridge session: registered as ${handle} (${LABEL})\n`)
+  // Ensure this tab has a native thread; the daemon creates-or-reuses it by label.
+  // On failure (Threaded Mode off) threadId stays undefined -> flat-chat fallback.
+  try {
+    const r = await api('/ensure-thread', { label: LABEL })
+    threadId = typeof r.thread_id === 'number' ? r.thread_id : undefined
+  } catch { threadId = undefined }
 }
 
 async function main(): Promise<void> {
