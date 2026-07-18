@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
 import sys
 import time
 import urllib.error
@@ -45,6 +46,25 @@ def _log(msg: str) -> None:
             fh.write(f"{dt.datetime.now().isoformat(timespec='seconds')} {msg}\n")
     except OSError:
         pass
+
+
+THREADS_FILE = STATE_DIR / "threads.json"
+
+
+def _label(payload: dict) -> str:
+    """This tab's key — same rule as session-mcp/stop-notify, so they share a thread."""
+    env = (os.environ.get("TG_BRIDGE_LABEL") or "").strip()
+    return env or Path(payload.get("cwd") or ".").name
+
+
+def _thread_id(label: str):
+    """The tab's message_thread_id from threads.json (daemon-written), or None."""
+    try:
+        t = json.loads(THREADS_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    rec = t.get(label)
+    return rec.get("thread_id") if isinstance(rec, dict) else None
 
 
 def _token() -> str:
@@ -83,16 +103,18 @@ def _api(token: str, method: str, payload: dict) -> dict:
     return {}
 
 
-def _create_rich(token: str, chat: str, text: str) -> dict:
+def _create_rich(token: str, chat: str, text: str, thread_id=None) -> dict:
     """Create the live line as a native Rich Message; fall back to plain on a
-    Bot API reject so the progress line still appears."""
+    Bot API reject so the progress line still appears. thread_id (when set) puts
+    the line in this tab's topic; edits inherit the thread from that message id."""
+    thread_extra = {"message_thread_id": thread_id} if thread_id else {}
     try:
         return _api(token, "sendRichMessage",
                     {"chat_id": chat, "rich_message": {"markdown": text},
-                     "disable_notification": True})
+                     "disable_notification": True, **thread_extra})
     except urllib.error.HTTPError:
         return _api(token, "sendMessage",
-                    {"chat_id": chat, "text": text, "disable_notification": True})
+                    {"chat_id": chat, "text": text, "disable_notification": True, **thread_extra})
 
 
 def _edit_rich(token: str, chat: str, mid: int, text: str) -> None:
@@ -200,9 +222,10 @@ def _handle_tool(payload: dict) -> None:
 
     text = _compose(tab, tool, _hint(tool, inp), st["started"], st["count"])
     token = _token()
+    tid = _thread_id(_label(payload))
     if not live:
         for chat in _chats():
-            res = _create_rich(token, chat, text)
+            res = _create_rich(token, chat, text, tid)
             mid = (res.get("result") or {}).get("message_id")
             if mid:
                 st["message_ids"][chat] = mid
