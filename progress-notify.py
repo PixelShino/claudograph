@@ -113,8 +113,13 @@ def _create_rich(token: str, chat: str, text: str, thread_id=None) -> dict:
                     {"chat_id": chat, "rich_message": {"markdown": text},
                      "disable_notification": True, **thread_extra})
     except urllib.error.HTTPError:
-        return _api(token, "sendMessage",
-                    {"chat_id": chat, "text": text, "disable_notification": True, **thread_extra})
+        try:
+            return _api(token, "sendMessage",
+                        {"chat_id": chat, "text": text, "disable_notification": True, **thread_extra})
+        except urllib.error.HTTPError:
+            # dead/stale topic -> flat chat, so the progress line never vanishes silently
+            return _api(token, "sendMessage",
+                        {"chat_id": chat, "text": text, "disable_notification": True})
 
 
 def _edit_rich(token: str, chat: str, mid: int, text: str) -> None:

@@ -242,12 +242,17 @@ def _send(token: str, chat: str, text: str, thread_id=None) -> None:
     # `thread_id` (when set) puts the message in this tab's native topic.
     thread_extra = {"message_thread_id": thread_id} if thread_id else {}
     plain_text = text if len(text) <= PLAIN_LIMIT else text[:PLAIN_LIMIT].rstrip() + " […]"
-    methods = (
+    methods = [
         ("sendRichMessage", {"chat_id": chat, "rich_message": {"markdown": text},
                              "disable_notification": False, **thread_extra}),
         ("sendMessage", {"chat_id": chat, "text": plain_text,
                          "disable_notification": False, **thread_extra}),
-    )
+    ]
+    if thread_id:
+        # A deleted/stale topic 400s every threaded attempt; a final flat-chat send
+        # guarantees the answer still reaches the user instead of vanishing silently.
+        methods.append(("sendMessage", {"chat_id": chat, "text": plain_text,
+                                        "disable_notification": False}))
     for i, (method, body) in enumerate(methods):
         last = i == len(methods) - 1
         req = urllib.request.Request(

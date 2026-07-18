@@ -159,13 +159,12 @@ async function handle(req: Request): Promise<Response> {
       // Flip the topic to 💤 only when the LAST tab of this label closes (another
       // tab with the same label keeps it active). History stays; nothing deleted.
       if (label && ![...sessions.values()].some(s => s.label === label)) {
-        const threads = readThreads()
-        const rec = threads[label]
-        if (rec) {
+        const rec0 = readThreads()[label]
+        if (rec0) {
           const nm = `💤 ${label}`
-          rec.status = 'idle'
-          try { await bot.api.editForumTopic(loadAllowFrom()[0], rec.thread_id, { name: nm }) } catch {}
-          rec.name = nm; threads[label] = rec; writeThreads(threads)
+          try { await bot.api.editForumTopic(loadAllowFrom()[0], rec0.thread_id, { name: nm }) } catch {}
+          const fresh = readThreads() // re-read after the await, then merge
+          if (fresh[label]) { fresh[label].status = 'idle'; fresh[label].name = nm; writeThreads(fresh) }
         }
       }
       return json({ ok: true })
@@ -175,8 +174,7 @@ async function handle(req: Request): Promise<Response> {
       // Cosmetic: rename the topic's DISPLAY name; the threads.json key (= label)
       // stays fixed so routing by thread_id is unaffected.
       const { label, name } = (await req.json()) as { label: string; name: string }
-      const threads = readThreads()
-      const rec = threads[label]
+      const rec = readThreads()[label]
       if (!rec) return json({ error: 'no thread for label' }, 404)
       const display = `🟢 ${name}`
       try {
@@ -184,7 +182,8 @@ async function handle(req: Request): Promise<Response> {
       } catch (e) {
         return json({ error: String(e).slice(0, 120) }, 200)
       }
-      rec.name = display; threads[label] = rec; writeThreads(threads)
+      const fresh = readThreads() // re-read after the await, then merge
+      if (fresh[label]) { fresh[label].name = display; writeThreads(fresh) }
       return json({ ok: true })
     }
 
@@ -206,8 +205,11 @@ async function handle(req: Request): Promise<Response> {
       const name = `🟢 ${label}`
       try {
         const topic = await bot.api.createForumTopic(chat, name)
-        threads[label] = { thread_id: topic.message_thread_id, name, status: 'active', ts: Date.now() }
-        writeThreads(threads)
+        // Re-read after the await: another /ensure-thread (different label) may have
+        // written during it; merging into a stale snapshot would clobber that label.
+        const fresh = readThreads()
+        fresh[label] = { thread_id: topic.message_thread_id, name, status: 'active', ts: Date.now() }
+        writeThreads(fresh)
         return json({ thread_id: topic.message_thread_id })
       } catch (err) {
         logInbound({ kind: 'ensure-thread:fail', label, error: String(err).slice(0, 140) })
@@ -254,6 +256,12 @@ async function handle(req: Request): Promise<Response> {
       }
       const s = sessions.get(body.handle)
       if (!s) return json({ error: 'unknown handle' }, 404)
+      // Only image files: `path` comes from the model and could otherwise be steered
+      // (prompt injection) to exfil a secret/token file into the chat. Loopback +
+      // secret already scope this to the owner, but keep the surface an image.
+      if (!/\.(png|jpe?g|webp|gif)$/i.test(body.path)) {
+        return json({ error: 'send-photo: only image files (.png/.jpg/.jpeg/.webp/.gif)' }, 400)
+      }
       s.lastActive = Date.now()
       const threadExtra = body.message_thread_id ? { message_thread_id: body.message_thread_id } : {}
       const ids: string[] = []
@@ -373,6 +381,11 @@ async function deliverToChat(
 ): Promise<string[]> {
   const replyExtra = reply_to ? { reply_parameters: { message_id: Number(reply_to) } } : {}
   const threadExtra = threadId ? { message_thread_id: threadId } : {}
+  // Last resort: plain send with NO thread id. A deleted/stale topic makes every
+  // threaded attempt 400 «message thread not found»; without this the whole send
+  // would throw and the tab goes silently dead. Falling back to the flat chat
+  // guarantees delivery instead of losing it.
+  const flatFallback = () => deliverClassic(chatId, text, undefined, kb, replyExtra, {})
   if (isRich(format)) {
     try {
       const sent = await bot.api.sendRichMessage(chatId, { markdown: text }, {
@@ -381,11 +394,20 @@ async function deliverToChat(
       return [String(sent.message_id)]
     } catch (err) {
       logInbound({ kind: 'rich:fallback', error: String(err).slice(0, 140) })
-      return deliverClassic(chatId, toMarkdownV2(text), 'MarkdownV2', kb, replyExtra, threadExtra)
+      try {
+        return await deliverClassic(chatId, toMarkdownV2(text), 'MarkdownV2', kb, replyExtra, threadExtra)
+      } catch (err2) {
+        logInbound({ kind: 'thread:drop', error: String(err2).slice(0, 140) })
+        return flatFallback()
+      }
     }
   }
   const parse_mode = format === 'markdownv2' ? ('MarkdownV2' as const) : undefined
-  return deliverClassic(chatId, text, parse_mode, kb, replyExtra, threadExtra)
+  try {
+    return await deliverClassic(chatId, text, parse_mode, kb, replyExtra, threadExtra)
+  } catch {
+    return flatFallback()
+  }
 }
 
 // Edit in place, mirroring send's rich-first-with-fallback. Used for streaming
