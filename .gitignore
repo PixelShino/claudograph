@@ -1,0 +1,10 @@
+# Runtime state — secrets, pids, logs, per-session data. NEVER commit.
+state/
+# Deps & caches
+node_modules/
+__pycache__/
+*.pyc
+# Transient
+*.log
+*.tmp
+*.env

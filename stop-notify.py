@@ -1,0 +1,216 @@
+"""Stop hook: push my final answer to Telegram, every turn, without my help.
+
+Relying on me to remember the «claude — готово» ping failed often enough that the
+user asked for it to be automatic. A Stop hook fires on every natural turn end, so
+the notification no longer depends on my memory.
+
+Sends straight to the Bot API rather than through the tg-bridge daemon: /send
+needs the tab's `handle`, which lives only inside that tab's session-mcp process
+(labels collide when two tabs share a repo). Direct send needs no handle and
+survives a dead daemon; replies then follow the daemon's usual swipe-reply rules.
+
+Never blocks: any failure exits 0 quietly — a broken notifier must not wedge the
+session.
+"""
+from __future__ import annotations
+
+import datetime as dt
+import json
+import sys
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+HOME = Path.home()
+TG_DIR = HOME / ".claude" / "channels" / "telegram"
+LOG = HOME / ".claude" / "tg-bridge" / "state" / "stop-notify.log"
+FULL_AUTO = HOME / ".claude" / "state" / "full-auto.json"  # armed by the my-full-auto skill
+LIMIT = 900  # Telegram hard limit is 4096; a phone ping wants a gist, not a wall.
+ATTEMPTS = 3  # the VPN drops TLS at random; one shot silently loses the ping
+
+
+def _token() -> str:
+    for line in (TG_DIR / ".env").read_text(encoding="utf-8").splitlines():
+        if line.startswith("TELEGRAM_BOT_TOKEN"):
+            return line.split("=", 1)[1].strip()
+    return ""
+
+
+def _chats() -> list[str]:
+    access = json.loads((TG_DIR / "access.json").read_text(encoding="utf-8"))
+    return [str(c) for c in access.get("allowFrom") or []]
+
+
+def _blocks(rec: dict) -> list[dict]:
+    content = (rec.get("message") or {}).get("content")
+    return [b for b in content if isinstance(b, dict)] if isinstance(content, list) else []
+
+
+def _turn_start(records: list[dict]) -> int:
+    """Index of the user prompt that opened this turn.
+
+    A `user` record is also how tool results come back, so a real prompt is one
+    whose content is a bare string or carries a text block.
+    """
+    for i in range(len(records) - 1, -1, -1):
+        rec = records[i]
+        if rec.get("type") != "user" or rec.get("isSidechain"):
+            continue
+        content = (rec.get("message") or {}).get("content")
+        if isinstance(content, str):
+            return i
+        if any(b.get("type") == "text" for b in _blocks(rec)):
+            return i
+    return 0
+
+
+def _last_answer_index(records: list[dict], start: int) -> int:
+    """Index of my last user-facing text this turn, or -1.
+
+    Subagent chatter (`isSidechain`) is not mine to report, and `thinking` blocks
+    are not for the user.
+    """
+    for i in range(len(records) - 1, start - 1, -1):
+        rec = records[i]
+        if rec.get("type") != "assistant" or rec.get("isSidechain"):
+            continue
+        if any(b.get("type") == "text" and (b.get("text") or "").strip() for b in _blocks(rec)):
+            return i
+    return -1
+
+
+def _ended_with_ping(records: list[dict], answer_at: int) -> bool:
+    """True only if I closed the turn by messaging Telegram myself.
+
+    Deduping on «any tg-bridge send this turn» would swallow the ping I exist for:
+    a long turn often opens with «взял в работу» and ends with the actual result.
+    Only a send AT-OR-AFTER my final text means the user already has that result —
+    this includes a `send` sitting in the SAME assistant message as the final text
+    (text + buttons in one reply), which `answer_at + 1` used to miss and then
+    double-post. An early «взял в работу» send lives in a much earlier record
+    (index < answer_at), so it still does NOT suppress the mirror.
+    """
+    for rec in records[answer_at:]:
+        for b in _blocks(rec):
+            if b.get("type") == "tool_use" and "tg-bridge" in (b.get("name") or ""):
+                return True
+    return False
+
+
+def _text_at(records: list[dict], index: int) -> str:
+    texts = [b.get("text") or "" for b in _blocks(records[index]) if b.get("type") == "text"]
+    return "\n".join(t for t in texts if t.strip()).strip()
+
+
+def _log(msg: str) -> None:
+    """One line per invocation. Without it, «no ping arrived» is ambiguous: hook
+    never called, called and skipped, or called and failed all look identical."""
+    try:
+        with LOG.open("a", encoding="utf-8") as fh:
+            fh.write(f"{dt.datetime.now().isoformat(timespec='seconds')} {msg}\n")
+    except OSError:
+        pass
+
+
+def main() -> None:
+    # Read stdin as BYTES: Python on Windows decodes stdin with the console
+    # codepage (cp1251 here), which mangles the UTF-8 payload — the Cyrillic
+    # username in `transcript_path` came through as «РђРґРјРёРЅРёСЃ» and every
+    # run died on FileNotFoundError, silently.
+    raw = sys.stdin.buffer.read().decode("utf-8", errors="replace")
+    payload = json.loads(raw or "{}")
+    _log(f"fired event={payload.get('hook_event_name')} active={payload.get('stop_hook_active')}")
+    if payload.get("stop_hook_active"):  # already in a forced continuation → no loop
+        _log("skip: stop_hook_active")
+        return
+    if FULL_AUTO.exists():
+        # my-full-auto turns don't «end» — its Stop hook sends me back for another.
+        # Pinging each one would buzz the phone all night; there, milestone reports
+        # are mine to send deliberately.
+        _log("skip: my-full-auto armed")
+        return
+
+    records = []
+    for line in Path(payload["transcript_path"]).read_text(encoding="utf-8").splitlines():
+        try:
+            records.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue  # a partially flushed tail line is not worth dying over
+
+    start = _turn_start(records)
+    answer_at = _last_answer_index(records, start)
+    if answer_at < 0:
+        _log("skip: no answer found")
+        return
+    if _ended_with_ping(records, answer_at):
+        _log("skip: turn already ended with a tg-bridge send")
+        return
+
+    answer = _text_at(records, answer_at)
+    if not answer:
+        _log("skip: empty answer")
+        return
+
+    tab = Path(payload.get("cwd") or ".").name
+    body = answer if len(answer) <= LIMIT else answer[:LIMIT].rstrip() + " […]"
+    text = f"claude · {tab}\n\n{body}"
+
+    token = _token()
+    for chat in _chats():
+        _send(token, chat, text)
+    _log(f"sent {len(body)} chars to {len(_chats())} chat(s)")
+
+
+def _send(token: str, chat: str, text: str) -> None:
+    """Deliver one message, retrying transient network failures.
+
+    «В 100% случаев» is the whole point of this hook, and a single attempt does not
+    meet it: the local VPN drops TLS mid-handshake at random (a real ping was lost
+    to `handshake timed out` on 2026-07-16). Telegram rejects a malformed request
+    deterministically, so only retry connection-level errors — retrying an HTTPError
+    would just spam the same 400 three times.
+    """
+    # Deliver as a native Rich Message (`sendRichMessage` + `markdown`) so my GFM
+    # answer renders with real headings/tables in Telegram. If the Bot API rejects
+    # the rich payload (bad markdown / old server → HTTPError), fall back to a plain
+    # `sendMessage` so delivery still hits «в 100% случаев». Connection errors are
+    # retried; a deterministic 400 moves straight to the next method.
+    methods = (
+        ("sendRichMessage", {"chat_id": chat, "rich_message": {"markdown": text},
+                             "disable_notification": False}),
+        ("sendMessage", {"chat_id": chat, "text": text,
+                         "disable_notification": False}),
+    )
+    for i, (method, body) in enumerate(methods):
+        last = i == len(methods) - 1
+        req = urllib.request.Request(
+            f"https://api.telegram.org/bot{token}/{method}",
+            data=json.dumps(body).encode("utf-8"),
+            headers={"content-type": "application/json"},
+        )
+        for attempt in range(1, ATTEMPTS + 1):
+            try:
+                urllib.request.urlopen(req, timeout=10).read()
+                if attempt > 1:
+                    _log(f"delivered on attempt {attempt} via {method}")
+                return
+            except urllib.error.HTTPError:
+                if last:
+                    raise  # plain also rejected — genuinely our bad request
+                _log(f"{method} rejected (HTTPError) → falling back to plain")
+                break  # try the next (plain) method
+            except (urllib.error.URLError, OSError) as exc:
+                if attempt == ATTEMPTS:
+                    if last:
+                        raise
+                    break  # exhausted on rich → try plain (net may have recovered)
+                _log(f"attempt {attempt} failed ({type(exc).__name__}), retrying")
+                time.sleep(attempt)  # 1s, 2s — the VPN's drops are brief
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as exc:  # noqa: BLE001 — a notifier must never block the session
+        _log(f"FAILED {type(exc).__name__}: {exc}")

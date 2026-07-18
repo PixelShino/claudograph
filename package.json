@@ -1,0 +1,16 @@
+{
+  "name": "tg-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Multi-session Telegram bridge for Claude Code: one bot, real inline buttons, N sessions routed without collision.",
+  "scripts": {
+    "daemon": "bun daemon.ts",
+    "mcp": "bun session-mcp.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "grammy": "^1.21.0",
+    "telegramify-markdown": "^1.3.3"
+  }
+}
