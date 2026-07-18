@@ -154,7 +154,37 @@ async function handle(req: Request): Promise<Response> {
 
     if (path === '/deregister' && req.method === 'POST') {
       const { handle: h } = (await req.json()) as { handle: string }
+      const label = sessions.get(h)?.label
       sessions.delete(h)
+      // Flip the topic to 💤 only when the LAST tab of this label closes (another
+      // tab with the same label keeps it active). History stays; nothing deleted.
+      if (label && ![...sessions.values()].some(s => s.label === label)) {
+        const threads = readThreads()
+        const rec = threads[label]
+        if (rec) {
+          const nm = `💤 ${label}`
+          rec.status = 'idle'
+          try { await bot.api.editForumTopic(loadAllowFrom()[0], rec.thread_id, { name: nm }) } catch {}
+          rec.name = nm; threads[label] = rec; writeThreads(threads)
+        }
+      }
+      return json({ ok: true })
+    }
+
+    if (path === '/rename-thread' && req.method === 'POST') {
+      // Cosmetic: rename the topic's DISPLAY name; the threads.json key (= label)
+      // stays fixed so routing by thread_id is unaffected.
+      const { label, name } = (await req.json()) as { label: string; name: string }
+      const threads = readThreads()
+      const rec = threads[label]
+      if (!rec) return json({ error: 'no thread for label' }, 404)
+      const display = `🟢 ${name}`
+      try {
+        await bot.api.editForumTopic(loadAllowFrom()[0], rec.thread_id, { name: display })
+      } catch (e) {
+        return json({ error: String(e).slice(0, 120) }, 200)
+      }
+      rec.name = display; threads[label] = rec; writeThreads(threads)
       return json({ ok: true })
     }
 
