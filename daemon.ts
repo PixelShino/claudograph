@@ -467,15 +467,25 @@ async function routeText(
   if (!loadAllowFrom().includes(String(ctx.from.id))) return
   if (sessions.size === 0) return
 
-  // Route by swipe-reply when the replied-to message maps to a live session;
-  // otherwise best-effort to the most recently active session, flagged.
-  const repliedId = ctx.message?.reply_to_message?.message_id
   let target: string | undefined
   let ambiguous = false
-  if (repliedId != null) target = msgToHandle.get(String(repliedId))
-  if (!target || !sessions.has(target)) {
-    target = lastSendHandle && sessions.has(lastSendHandle) ? lastSendHandle : sessions.keys().next().value
-    ambiguous = true
+  // Thread-first: a message typed inside a tab's topic routes UNAMBIGUOUSLY to
+  // that tab (message_thread_id -> label -> live session). This is more reliable
+  // than swipe-reply and eliminates the ambiguous flag for threaded messages.
+  const tid = (ctx.message as { message_thread_id?: number })?.message_thread_id
+  if (tid != null) {
+    const threads = readThreads()
+    const label = Object.keys(threads).find(k => threads[k].thread_id === tid)
+    if (label) for (const [h, s] of sessions) if (s.label === label) { target = h; break }
+  }
+  // Fallback (General topic or no thread match): swipe-reply, else most-recent, flagged.
+  if (!target) {
+    const repliedId = ctx.message?.reply_to_message?.message_id
+    if (repliedId != null) target = msgToHandle.get(String(repliedId))
+    if (!target || !sessions.has(target)) {
+      target = lastSendHandle && sessions.has(lastSendHandle) ? lastSendHandle : sessions.keys().next().value
+      ambiguous = true
+    }
   }
   const s = target ? sessions.get(target) : undefined
   if (!s) return
