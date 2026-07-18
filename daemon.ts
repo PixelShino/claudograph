@@ -237,7 +237,11 @@ async function handle(req: Request): Promise<Response> {
       if (!s) return json({ error: 'unknown handle' }, 404)
       s.lastActive = Date.now()
       lastSendHandle = body.handle
-      const ids = await sendToUser(body.handle, body.text, body.buttons, body.reply_to, body.format, body.message_thread_id)
+      // Default to rich: forgetting format='markdown' is easy and shipped raw markdown
+      // to the user twice. Rich falls back to MarkdownV2/plain on reject, so this is safe.
+      // Explicit format='text' still sends plain.
+      const fmt = body.format ?? 'markdown'
+      const ids = await sendToUser(body.handle, body.text, body.buttons, body.reply_to, fmt, body.message_thread_id)
       return json({ message_ids: ids })
     }
 
@@ -247,8 +251,9 @@ async function handle(req: Request): Promise<Response> {
         format?: 'text' | 'markdown' | 'markdownv2' | 'rich'
       }
       const kb = body.buttons?.length ? buildKeyboard(body.handle, body.buttons) : undefined
+      const fmt = body.format ?? 'markdown' // same rich-by-default as /send
       for (const chatId of loadAllowFrom()) {
-        await editMessage(chatId, Number(body.message_id), body.text, body.format, kb)
+        await editMessage(chatId, Number(body.message_id), body.text, fmt, kb)
       }
       if (body.buttons?.length) {
         buttonLabels.set(body.message_id, Object.fromEntries(body.buttons.map(b => [b.key, b.label])))
