@@ -127,20 +127,32 @@ def _last_answer_index(records: list[dict], start: int) -> int:
     return -1
 
 
-def _ended_with_ping(records: list[dict], answer_at: int) -> bool:
-    """True only if I closed the turn by messaging Telegram myself.
+def _is_bridge_send(b: dict) -> bool:
+    """A tg-bridge `send` tool call (a NEW Telegram message). react/edit/rename
+    don't create a message, so they never cause a duplicate."""
+    return b.get("type") == "tool_use" and "tg-bridge__send" in (b.get("name") or "")
 
-    Deduping on «any tg-bridge send this turn» would swallow the ping I exist for:
-    a long turn often opens with «взял в работу» and ends with the actual result.
-    Only a send AT-OR-AFTER my final text means the user already has that result —
-    this includes a `send` sitting in the SAME assistant message as the final text
-    (text + buttons in one reply), which `answer_at + 1` used to miss and then
-    double-post. An early «взял в работу» send lives in a much earlier record
-    (index < answer_at), so it still does NOT suppress the mirror.
+
+def _ended_with_ping(records: list[dict], start: int, answer_at: int) -> bool:
+    """True if I already delivered this turn's content to Telegram myself, so
+    mirroring the final text would double-post. Two triggers:
+
+    (a) a `send` AT-OR-AFTER my final text — I closed the turn by messaging TG
+        (incl. a send in the SAME assistant message as the wrap-up text);
+    (b) an INTERACTIVE `send` (buttons) ANYWHERE this turn — a button prompt is a
+        self-contained message the user must tap; it usually precedes the wrap-up
+        text, and mirroring on top of it is the duplicate the user hit.
+
+    A plain `send` with no buttons that comes BEFORE the final text (a «взял в
+    работу» status ping) does NOT suppress — the real result still needs to reach
+    Telegram. If a result must reach TG after a button prompt, send it explicitly.
     """
-    for rec in records[answer_at:]:
+    for rec in records[answer_at:]:                       # (a)
+        if any(_is_bridge_send(b) for b in _blocks(rec)):
+            return True
+    for rec in records[start + 1:]:                       # (b)
         for b in _blocks(rec):
-            if b.get("type") == "tool_use" and "tg-bridge" in (b.get("name") or ""):
+            if _is_bridge_send(b) and (b.get("input") or {}).get("buttons"):
                 return True
     return False
 
@@ -190,8 +202,8 @@ def main() -> None:
     if answer_at < 0:
         _log("skip: no answer found")
         return
-    if _ended_with_ping(records, answer_at):
-        _log("skip: turn already ended with a tg-bridge send")
+    if _ended_with_ping(records, start, answer_at):
+        _log("skip: already delivered to Telegram this turn (explicit send)")
         return
 
     answer = _text_at(records, answer_at)
