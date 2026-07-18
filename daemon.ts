@@ -276,6 +276,34 @@ async function handle(req: Request): Promise<Response> {
       return json({ message_ids: ids })
     }
 
+    if (path === '/send-album' && req.method === 'POST') {
+      // A photo collage: 2..10 local images as one Telegram album (sendMediaGroup),
+      // caption on the first. Same co-located-path model as /send-photo.
+      const body = (await req.json()) as {
+        handle: string; paths: string[]; caption?: string; message_thread_id?: number
+      }
+      const s = sessions.get(body.handle)
+      if (!s) return json({ error: 'unknown handle' }, 404)
+      const paths = (body.paths || []).filter(p => /\.(png|jpe?g|webp|gif)$/i.test(p))
+      if (paths.length < 2 || paths.length > 10) {
+        return json({ error: 'send-album: 2..10 image files required' }, 400)
+      }
+      s.lastActive = Date.now()
+      const threadExtra = body.message_thread_id ? { message_thread_id: body.message_thread_id } : {}
+      const media = paths.map((p, i) => ({
+        type: 'photo' as const,
+        media: new InputFile(p),
+        ...(i === 0 && body.caption ? { caption: body.caption } : {}),
+      }))
+      const ids: string[] = []
+      for (const chatId of loadAllowFrom()) {
+        const sent = await bot.api.sendMediaGroup(chatId, media, threadExtra)
+        for (const m of sent) { ids.push(String(m.message_id)); msgToHandle.set(String(m.message_id), body.handle) }
+      }
+      trim(msgToHandle)
+      return json({ message_ids: ids })
+    }
+
     if (path === '/edit' && req.method === 'POST') {
       const body = (await req.json()) as {
         handle: string; message_id: string; text: string; buttons?: Button[]

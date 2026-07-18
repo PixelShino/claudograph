@@ -185,6 +185,7 @@ Inside any wired-up tab, Claude has these tools:
 | `edit` | Edit a message this tab sent (for streaming/progress). |
 | `react` | React to your message with an emoji. |
 | `send_photo` | Send a local image (`path` + optional `caption`) — e.g. a screenshot — into the tab's topic. |
+| `send_album` | Send a collage: 2–10 local images as one Telegram album (`paths` + optional `caption`). |
 | `rename_thread` | Rename this tab's Telegram topic. |
 
 You just talk to the bot. Text routes to the right tab; tapping a button returns to the tab that asked.

@@ -186,6 +186,19 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ['path'],
       },
     },
+    {
+      name: 'send_album',
+      description:
+        'Send a photo collage: 2–10 local images as one Telegram album. `paths` is an array of local file paths; optional `caption` on the first. Lands in this tab\'s topic.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          paths: { type: 'array', items: { type: 'string' }, description: '2–10 local image paths.' },
+          caption: { type: 'string', description: 'Optional caption on the first image.' },
+        },
+        required: ['paths'],
+      },
+    },
   ],
 }))
 
@@ -211,6 +224,11 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         const res = await api('/send-photo', { handle, ...args, ...(threadId ? { message_thread_id: threadId } : {}) })
         const ids: string[] = res.message_ids ?? []
         return { content: [{ type: 'text', text: `photo sent (ids: ${ids.join(', ')})` }] }
+      }
+      case 'send_album': {
+        const res = await api('/send-album', { handle, ...args, ...(threadId ? { message_thread_id: threadId } : {}) })
+        const ids: string[] = res.message_ids ?? []
+        return { content: [{ type: 'text', text: `album sent (${ids.length} photos)` }] }
       }
       default:
         return { content: [{ type: 'text', text: `unknown tool: ${req.params.name}` }], isError: true }
