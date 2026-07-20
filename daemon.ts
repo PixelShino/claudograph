@@ -230,6 +230,41 @@ async function handle(req: Request): Promise<Response> {
       }
     }
 
+    if (path === '/notify' && req.method === 'POST') {
+      // Handle-free send for the Python hooks (stop-notify / progress-notify).
+      // They used to open their OWN connection to api.telegram.org, which is a
+      // second transport with its own token, retries and thread lookup — and the
+      // one that DPI actually blocks here, while the daemon's connection works.
+      // Addressed by label, not handle: hooks live outside any session process.
+      // create: {label, text} -> {ids: {chat: message_id}}
+      // edit:   {label, text, ids}      delete: {ids, delete: true}
+      const body = (await req.json()) as {
+        label?: string; text?: string; ids?: Record<string, number>
+        delete?: boolean; silent?: boolean; format?: Fmt
+      }
+      const threadId = body.label ? readThreads()[body.label]?.thread_id : undefined
+      if (body.delete) {
+        for (const [chat, mid] of Object.entries(body.ids ?? {})) {
+          await bot.api.deleteMessage(chat, mid).catch(() => {}) // already gone is fine
+        }
+        return json({ ok: true })
+      }
+      if (!body.text) return json({ error: 'text required' }, 400)
+      if (body.ids && Object.keys(body.ids).length) {
+        for (const [chat, mid] of Object.entries(body.ids)) {
+          await editMessage(chat, mid, body.text, body.format ?? 'markdown', undefined)
+        }
+        return json({ ok: true })
+      }
+      const ids: Record<string, string> = {}
+      for (const chat of loadAllowFrom()) {
+        const sent = await deliverToChat(chat, body.text, body.format ?? 'markdown', undefined, undefined, threadId, body.silent)
+        const last = sent[sent.length - 1] // rich = one message; classic = last chunk
+        if (last) ids[chat] = last
+      }
+      return json({ ids })
+    }
+
     if (path === '/poll') {
       const h = url.searchParams.get('handle') ?? ''
       const s = sessions.get(h)
@@ -419,14 +454,21 @@ async function deliverClassic(
 async function deliverToChat(
   chatId: string, text: string, format: Fmt | undefined,
   kb: InlineKeyboard | undefined, reply_to?: string, threadId?: number,
+  silent?: boolean,
 ): Promise<string[]> {
   const replyExtra = reply_to ? { reply_parameters: { message_id: Number(reply_to) } } : {}
-  const threadExtra = threadId ? { message_thread_id: threadId } : {}
+  // `silent` rides along with the thread id: a progress line that buzzes the
+  // phone on every tool call is worse than no progress line at all.
+  const threadExtra = {
+    ...(threadId ? { message_thread_id: threadId } : {}),
+    ...(silent ? { disable_notification: true } : {}),
+  }
   // Last resort: plain send with NO thread id. A deleted/stale topic makes every
   // threaded attempt 400 «message thread not found»; without this the whole send
   // would throw and the tab goes silently dead. Falling back to the flat chat
   // guarantees delivery instead of losing it.
-  const flatFallback = () => deliverClassic(chatId, text, undefined, kb, replyExtra, {})
+  const flatFallback = () =>
+    deliverClassic(chatId, text, undefined, kb, replyExtra, silent ? { disable_notification: true } : {})
   if (isRich(format)) {
     try {
       const sent = await bot.api.sendRichMessage(chatId, { markdown: text }, {

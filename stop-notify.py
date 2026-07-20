@@ -4,10 +4,10 @@ Relying on me to remember the «claude — готово» ping failed often enou
 user asked for it to be automatic. A Stop hook fires on every natural turn end, so
 the notification no longer depends on my memory.
 
-Sends straight to the Bot API rather than through the tg-bridge daemon: /send
-needs the tab's `handle`, which lives only inside that tab's session-mcp process
-(labels collide when two tabs share a repo). Direct send needs no handle and
-survives a dead daemon; replies then follow the daemon's usual swipe-reply rules.
+Sends through the daemon's `/notify` (addressed by label — a `handle` lives only
+inside that tab's session-mcp process). The daemon owns the one connection that
+actually reaches Telegram here; a direct Bot API send is kept as the fallback
+for when no daemon is running. See `bridge_client` for why.
 
 Never blocks: any failure exits 0 quietly — a broken notifier must not wedge the
 session.
@@ -23,6 +23,9 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # hooks run with the project as cwd
+import bridge_client  # noqa: E402
 
 HOME = Path.home()
 TG_DIR = HOME / ".claude" / "channels" / "telegram"
@@ -219,6 +222,12 @@ def main() -> None:
         body = f"{summary}\n\n<details><summary>Подробнее</summary>\n\n{details}\n</details>"
     text = f"claude · {tab}\n\n{body}"
 
+    # Preferred path: the daemon's connection (see bridge_client). The direct
+    # send below stays as the fallback for when no daemon is running.
+    if bridge_client.notify(label=tab, text=text) is not None:
+        _log(f"sent via daemon to thread={tid} ({len(text)} chars)")
+        return
+    _log("daemon unreachable → direct send")
     token = _token()
     for chat in _chats():
         _send(token, chat, text, tid)

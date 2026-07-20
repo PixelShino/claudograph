@@ -28,6 +28,9 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # hooks run with the project as cwd
+import bridge_client  # noqa: E402
+
 HOME = Path.home()
 TG_DIR = HOME / ".claude" / "channels" / "telegram"
 STATE_DIR = HOME / ".claude" / "tg-bridge" / "state"
@@ -184,12 +187,14 @@ def _handle_stop(sid: str) -> None:
         st = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         st = {}
-    token = _token()
-    for chat, mid in (st.get("message_ids") or {}).items():
-        try:
-            _api(token, "deleteMessage", {"chat_id": chat, "message_id": mid})
-        except Exception:  # noqa: BLE001 — best-effort cleanup
-            pass
+    ids = st.get("message_ids") or {}
+    if ids and bridge_client.notify(ids=ids, delete=True) is None:
+        token = _token()
+        for chat, mid in ids.items():
+            try:
+                _api(token, "deleteMessage", {"chat_id": chat, "message_id": mid})
+            except Exception:  # noqa: BLE001 — best-effort cleanup
+                pass
     try:
         path.unlink()
     except OSError:
@@ -226,8 +231,22 @@ def _handle_tool(payload: dict) -> None:
         return
 
     text = _compose(tab, tool, _hint(tool, inp), st["started"], st["count"])
+    tab_label = _label(payload)
+    # Through the daemon first (see bridge_client); direct Bot API is the fallback.
+    res = bridge_client.notify(
+        label=tab_label, text=text, silent=True,
+        **({"ids": st["message_ids"]} if live else {}),
+    )
+    if res is not None:
+        if not live:
+            st["message_ids"] = {c: int(m) for c, m in (res.get("ids") or {}).items()}
+            _log(f"created {sid} at step {st['count']} via daemon")
+        st["last_edit"] = now
+        path.write_text(json.dumps(st), encoding="utf-8")
+        return
+
     token = _token()
-    tid = _thread_id(_label(payload))
+    tid = _thread_id(tab_label)
     if not live:
         for chat in _chats():
             res = _create_rich(token, chat, text, tid)
