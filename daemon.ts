@@ -37,6 +37,8 @@ const bot = new Bot(TOKEN)
 type Session = {
   handle: string
   label: string
+  /** A subagent or background job, not the tab the user is typing in. */
+  child: boolean
   lastActive: number
   queue: PollEvent[]
   waiter: ((e: PollEvent) => void) | null
@@ -70,6 +72,18 @@ function push(s: Session, ev: PollEvent): void {
   } else {
     s.queue.push(ev)
   }
+}
+
+/** Who receives a message typed in this label's topic. One busy tab registers
+ *  many sessions — every subagent and background job spawns its own MCP server
+ *  and inherits the tab's label — and picking the first by registration order
+ *  handed the user's message to a background job that would never answer it.
+ *  Prefer the real tab; among equals the most recently active one. */
+function pickForLabel(label: string): string | undefined {
+  const mine = [...sessions.values()].filter(s => s.label === label)
+  const primary = mine.filter(s => !s.child)
+  const pool = primary.length ? primary : mine // all children -> best effort
+  return pool.sort((a, b) => b.lastActive - a.lastActive)[0]?.handle
 }
 
 /** Flip the tab's topic to 💤, but only once its LAST session is gone (another
@@ -142,8 +156,8 @@ async function handle(req: Request): Promise<Response> {
   if (path === '/debug') return json({
     polling, lastPollError, lastSendHandle,
     sessions: [...sessions.values()].map(s => ({
-      handle: s.handle, label: s.label, queueLen: s.queue.length, waiting: !!s.waiter,
-      ageMs: Date.now() - s.lastActive,
+      handle: s.handle, label: s.label, child: s.child, queueLen: s.queue.length, waiting: !!s.waiter,
+      ageMs: Date.now() - s.lastActive, routed: pickForLabel(s.label) === s.handle,
     })),
     recentInbound,
   })
@@ -160,9 +174,9 @@ async function handle(req: Request): Promise<Response> {
 
   try {
     if (path === '/register' && req.method === 'POST') {
-      const { label } = (await req.json()) as { label?: string }
+      const { label, child } = (await req.json()) as { label?: string; child?: boolean }
       const h = newHandle()
-      sessions.set(h, { handle: h, label: label ?? h, lastActive: Date.now(), queue: [], waiter: null })
+      sessions.set(h, { handle: h, label: label ?? h, child: !!child, lastActive: Date.now(), queue: [], waiter: null })
       process.stderr.write(`register ${h} (${label ?? '-'})\n`)
       return json({ handle: h })
     }
@@ -639,7 +653,7 @@ async function routeText(
   if (tid != null) {
     const threads = readThreads()
     const label = Object.keys(threads).find(k => threads[k].thread_id === tid)
-    if (label) for (const [h, s] of sessions) if (s.label === label) { target = h; break }
+    if (label) target = pickForLabel(label)
   }
   // Fallback (General topic or no thread match): swipe-reply, else most-recent, flagged.
   if (!target) {

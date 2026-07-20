@@ -311,7 +311,11 @@ async function pollLoop(): Promise<void> {
 async function connect(): Promise<void> {
   await ensureDaemon()
   SECRET = readSecret()
-  handle = (await api('/register', { label: LABEL })).handle
+  // `child`: subagents and background jobs are full sessions with their own MCP
+  // server and inherit the parent's label, so a busy tab registers many. They
+  // must not receive the user's inbound messages — see the daemon's routing.
+  const child = process.env.CLAUDE_CODE_CHILD_SESSION === '1'
+  handle = (await api('/register', { label: LABEL, child })).handle
   process.stderr.write(`tg-bridge session: registered as ${handle} (${LABEL})\n`)
   // Ensure this tab has a native thread; the daemon creates-or-reuses it by label.
   // On failure (Threaded Mode off) threadId stays undefined -> flat-chat fallback.
