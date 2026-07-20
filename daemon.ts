@@ -405,8 +405,19 @@ async function handle(req: Request): Promise<Response> {
       const kb = new InlineKeyboard()
         .text('✅ Разрешить', `${body.handle}|perm:allow:${body.request_id}`)
         .text('❌ Отклонить', `${body.handle}|perm:deny:${body.request_id}`)
+      // Into the tab's topic, like every other message. Without the thread id
+      // the prompt lands in the forum's General topic — invisible to a user who
+      // is watching the tab, so the request just looks like it never arrived.
+      const threadId = readThreads()[s.label]?.thread_id
+      const extra = { reply_markup: kb, ...(threadId ? { message_thread_id: threadId } : {}) }
       for (const chatId of loadAllowFrom()) {
-        await bot.api.sendMessage(chatId, text, { reply_markup: kb }).catch(() => {})
+        try {
+          await bot.api.sendMessage(chatId, text, extra)
+        } catch (err) {
+          // A stale topic must not swallow a permission prompt: retry flat.
+          logInbound({ kind: 'permission:thread-drop', error: String(err).slice(0, 140) })
+          await bot.api.sendMessage(chatId, text, { reply_markup: kb }).catch(() => {})
+        }
       }
       return json({ ok: true })
     }

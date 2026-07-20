@@ -24,6 +24,11 @@ SEND_BTN = {"type": "tool_use", "name": "mcp__tg-bridge__send",
             "input": {"text": "выбор", "buttons": [{"key": "a", "label": "A"}]}}
 SEND_PLAIN = {"type": "tool_use", "name": "mcp__tg-bridge__send",
               "input": {"text": "взял в работу"}}
+# The answer itself, sent by hand — not a status ping.
+SEND_ANSWER = {"type": "tool_use", "name": "mcp__tg-bridge__send",
+               "input": {"text": "Переделал. Ты прав был по сути: " + "и" * 900}}
+SEND_PHOTOS = {"type": "tool_use", "name": "mcp__tg-bridge__send_album",
+               "input": {"paths": ["a.png", "b.png"], "caption": "скрины"}}
 
 
 def _run(recs):
@@ -61,7 +66,24 @@ def test_send_after_text_suppresses():
     assert _run(recs) is True
 
 
+def test_bug_full_answer_sent_by_hand_then_pointer_text_suppresses():
+    # THE BUG (2026-07-20): the answer went out via an explicit plain `send`, then
+    # the wrap-up line in the terminal was «Переделал, скрины в тг.» — a pointer,
+    # not a result. Mirroring it posted the turn twice.
+    recs = [user(), asst(SEND_ANSWER), asst(BASH), asst(T("Переделал, скрины в тг."))]
+    assert _run(recs) is True, "a substantial hand-sent answer must suppress the mirror"
+
+
+def test_photo_album_with_short_caption_still_mirrors():
+    # Screenshots + a real text answer are not a duplicate: the caption is not the
+    # answer, so the text must still reach Telegram.
+    recs = [user(), asst(SEND_PHOTOS), asst(T("Вот что изменилось: " + "и" * 500))]
+    assert _run(recs) is False, "a short caption must not suppress the result mirror"
+
+
 for t in (
+    test_bug_full_answer_sent_by_hand_then_pointer_text_suppresses,
+    test_photo_album_with_short_caption_still_mirrors,
     test_bug_button_send_before_text_suppresses,
     test_plain_ping_before_text_still_mirrors,
     test_text_and_send_same_message_suppresses,

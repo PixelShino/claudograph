@@ -35,6 +35,7 @@ ATTEMPTS = 3  # the VPN drops TLS at random; one shot silently loses the ping
 THREADS_FILE = HOME / ".claude" / "tg-bridge" / "state" / "threads.json"
 PLAIN_LIMIT = 4096  # Telegram plain-send hard cap (a native Rich Message holds 32768)
 SUMMARY_SHORT = 600  # answers at most this long show whole; longer -> summary + <details>
+PING_MAX = 400  # a plain send longer than this is the answer itself, not a status ping
 _TG_MARKER = re.compile(r"<!--\s*tg:\s*(.*?)\s*-->", re.S)
 
 
@@ -136,26 +137,38 @@ def _is_bridge_send(b: dict) -> bool:
     return b.get("type") == "tool_use" and "tg-bridge__send" in (b.get("name") or "")
 
 
+def _send_body(b: dict) -> str:
+    """What a send tool call actually puts in Telegram (photos carry a caption)."""
+    inp = b.get("input") or {}
+    return str(inp.get("text") or inp.get("caption") or "")
+
+
 def _ended_with_ping(records: list[dict], start: int, answer_at: int) -> bool:
     """True if I already delivered this turn's content to Telegram myself, so
-    mirroring the final text would double-post. Two triggers:
+    mirroring the final text would double-post. Three triggers:
 
     (a) a `send` AT-OR-AFTER my final text — I closed the turn by messaging TG
         (incl. a send in the SAME assistant message as the wrap-up text);
     (b) an INTERACTIVE `send` (buttons) ANYWHERE this turn — a button prompt is a
         self-contained message the user must tap; it usually precedes the wrap-up
-        text, and mirroring on top of it is the duplicate the user hit.
+        text, and mirroring on top of it is the duplicate the user hit;
+    (c) a SUBSTANTIAL plain `send` (over PING_MAX) anywhere this turn — that was
+        the answer itself, and the trailing terminal text is only a pointer to it
+        («Переделал, скрины в тг.»). Mirroring it posted the same turn twice.
 
-    A plain `send` with no buttons that comes BEFORE the final text (a «взял в
-    работу» status ping) does NOT suppress — the real result still needs to reach
-    Telegram. If a result must reach TG after a button prompt, send it explicitly.
+    A SHORT plain `send` before the final text is a «взял в работу» status ping
+    and does NOT suppress — the real result still needs to reach Telegram.
     """
     for rec in records[answer_at:]:                       # (a)
         if any(_is_bridge_send(b) for b in _blocks(rec)):
             return True
-    for rec in records[start + 1:]:                       # (b)
+    for rec in records[start + 1:]:                       # (b), (c)
         for b in _blocks(rec):
-            if _is_bridge_send(b) and (b.get("input") or {}).get("buttons"):
+            if not _is_bridge_send(b):
+                continue
+            if (b.get("input") or {}).get("buttons"):
+                return True
+            if len(_send_body(b)) > PING_MAX:
                 return True
     return False
 
