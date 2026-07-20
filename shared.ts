@@ -18,8 +18,9 @@ export const TG_STATE_DIR = process.env.TELEGRAM_STATE_DIR ?? join(HOME, '.claud
 export const TG_ENV_FILE = join(TG_STATE_DIR, '.env')
 export const TG_ACCESS_FILE = join(TG_STATE_DIR, 'access.json')
 
-// Our own state.
-export const BRIDGE_DIR = join(HOME, '.claude', 'tg-bridge')
+// Our own state. TG_BRIDGE_HOME redirects it (tests point it at a temp dir so
+// they never touch the live threads.json of a running bridge).
+export const BRIDGE_DIR = process.env.TG_BRIDGE_HOME ?? join(HOME, '.claude', 'tg-bridge')
 export const STATE_DIR = join(BRIDGE_DIR, 'state')
 export const SECRET_FILE = join(STATE_DIR, 'daemon.secret')
 export const DAEMON_PID = join(STATE_DIR, 'daemon.pid')
@@ -89,6 +90,12 @@ export type ThreadsFile = Record<string, ThreadRecord>
 export function labelKey(cwd: string, envLabel?: string): string {
   const e = (envLabel ?? '').trim()
   return e || basename(cwd)
+}
+
+/** The topic's display name without its status emoji — a name set via
+ *  /rename-thread must survive the 🟢 <-> 💤 flips. */
+export function baseName(display: string, label: string): string {
+  return display.replace(/^[🟢💤]\s*/u, '').trim() || label
 }
 
 export function readThreads(): ThreadsFile {

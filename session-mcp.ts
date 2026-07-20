@@ -263,6 +263,10 @@ let stopping = false
 // pick up new code) without needing a session restart.
 async function reconnect(): Promise<void> {
   if (stopping) return
+  // Drop the old handle first: without this every reconnect leaks a ghost
+  // session that lingers until the daemon's 70s reaper, so one tab shows up
+  // as many. Best-effort — the daemon is usually the thing that just died.
+  if (handle) await api('/deregister', { handle, reconnecting: true }).catch(() => {})
   try { await connect() } catch { await sleep(1500) }
 }
 

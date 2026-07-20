@@ -24,7 +24,7 @@ import {
   loadToken, loadAllowFrom, ensureSecret,
   chunk, CALLBACK_MAX, CHUNK_LIMIT,
   HOST, PORT, DAEMON_PID, INBOX_DIR,
-  readThreads, writeThreads,
+  readThreads, writeThreads, baseName,
   type PollEvent, type Button,
 } from './shared.ts'
 
@@ -72,6 +72,20 @@ function push(s: Session, ev: PollEvent): void {
   }
 }
 
+/** Flip the tab's topic to 💤, but only once its LAST session is gone (another
+ *  tab with the same label keeps it active). Both ways a session can end —
+ *  clean /deregister and silent reap — must route through here, else a tab that
+ *  died without shutting down (crash, killed window, sleep) stays 🟢 forever. */
+async function markIdle(label: string): Promise<void> {
+  if ([...sessions.values()].some(s => s.label === label)) return
+  const rec = readThreads()[label]
+  if (!rec || rec.status === 'idle') return
+  const nm = `💤 ${baseName(rec.name, label)}`
+  try { await bot.api.editForumTopic(loadAllowFrom()[0], rec.thread_id, { name: nm }) } catch {}
+  const fresh = readThreads() // re-read after the await, then merge
+  if (fresh[label]) { fresh[label].status = 'idle'; fresh[label].name = nm; writeThreads(fresh) }
+}
+
 // Reap dead sessions so taps on their buttons report "session closed".
 setInterval(() => {
   const now = Date.now()
@@ -79,6 +93,7 @@ setInterval(() => {
     if (now - s.lastActive > SESSION_TTL) {
       if (s.waiter) { const w = s.waiter; s.waiter = null; w({ type: 'idle' }) }
       sessions.delete(h)
+      void markIdle(s.label)
     }
   }
 }, 30_000).unref()
@@ -153,20 +168,13 @@ async function handle(req: Request): Promise<Response> {
     }
 
     if (path === '/deregister' && req.method === 'POST') {
-      const { handle: h } = (await req.json()) as { handle: string }
+      // `reconnecting`: the session is only swapping handles (daemon restart),
+      // so drop the old one but leave the topic 🟢 — flipping it to 💤 here just
+      // makes the name flicker, /ensure-thread flips it right back.
+      const { handle: h, reconnecting } = (await req.json()) as { handle: string; reconnecting?: boolean }
       const label = sessions.get(h)?.label
       sessions.delete(h)
-      // Flip the topic to 💤 only when the LAST tab of this label closes (another
-      // tab with the same label keeps it active). History stays; nothing deleted.
-      if (label && ![...sessions.values()].some(s => s.label === label)) {
-        const rec0 = readThreads()[label]
-        if (rec0) {
-          const nm = `💤 ${label}`
-          try { await bot.api.editForumTopic(loadAllowFrom()[0], rec0.thread_id, { name: nm }) } catch {}
-          const fresh = readThreads() // re-read after the await, then merge
-          if (fresh[label]) { fresh[label].status = 'idle'; fresh[label].name = nm; writeThreads(fresh) }
-        }
-      }
+      if (label && !reconnecting) await markIdle(label) // history stays; nothing deleted
       return json({ ok: true })
     }
 
@@ -196,8 +204,13 @@ async function handle(req: Request): Promise<Response> {
       const threads = readThreads()
       const existing = threads[label]
       if (existing) {
+        const wasIdle = existing.status === 'idle'
         existing.status = 'active'; existing.ts = Date.now()
+        if (wasIdle) existing.name = `🟢 ${baseName(existing.name, label)}` // back from 💤
         threads[label] = existing; writeThreads(threads)
+        if (wasIdle) {
+          try { await bot.api.editForumTopic(loadAllowFrom()[0], existing.thread_id, { name: existing.name }) } catch {}
+        }
         return json({ thread_id: existing.thread_id })
       }
       const chat = loadAllowFrom()[0]
