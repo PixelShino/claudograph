@@ -37,7 +37,7 @@ STATE_DIR = HOME / ".claude" / "tg-bridge" / "state"
 LOG = STATE_DIR / "progress-notify.log"
 FULL_AUTO = HOME / ".claude" / "state" / "full-auto.json"  # armed by the my-full-auto skill
 
-THROTTLE = 8.0        # seconds between edits of the live message
+THROTTLE = 3.0        # seconds between edits — Telegram throttles editMessageText below this
 WARMUP_TOOLS = 3      # don't show a line before this many tools…
 WARMUP_SECS = 10.0    # …unless the turn has already run this long
 ATTEMPTS = 3          # the VPN drops TLS at random; one shot silently loses it
@@ -151,20 +151,27 @@ def _hint(tool: str, inp: dict) -> str:
     return tool
 
 
-ICON = {
-    "Bash": "⚡", "Read": "📖", "Edit": "✏️", "Write": "✏️", "Grep": "🔎",
-    "Glob": "🔎", "Task": "🤖", "Agent": "🤖",
-}
+BAR_CELLS = 10  # the bar is a PULSE, not a percentage: total steps are unknowable
 
 
 def _compose(tab: str, tool: str, hint: str, started: float, count: int) -> str:
+    """The live line, user-chosen layout (2026-07-27): a bar instead of per-tool
+    emoji, which read as clutter. The bar cycles every BAR_CELLS steps — it shows
+    that work is MOVING, and deliberately doesn't pretend to know how far along we
+    are. Monospace keeps the cells from jittering as the text around them changes;
+    the wall-clock stamp makes a frozen line obvious at a glance."""
     elapsed = int(max(0.0, time.time() - started))
-    when = f"{elapsed}s" if elapsed < 60 else f"{elapsed // 60}m {elapsed % 60}s"
-    icon = ICON.get(tool, "🛠")
     hint = hint.strip().replace("\n", " ")
     if len(hint) > 70:
         hint = hint[:70].rstrip() + "…"
-    return f"**⏳ claude · {tab}**\n\n{icon} **{tool}** · {hint}\n⏱ {when} · шаг {count}"
+    filled = (count - 1) % BAR_CELLS + 1
+    bar = "▰" * filled + "▱" * (BAR_CELLS - filled)
+    return (f"### {tab}\n\n"
+            f"`{bar}`\n\n"
+            f"> `{tool}` · {hint}\n\n"
+            f"**шаг {count}**\n"
+            f"таймер {elapsed // 60}:{elapsed % 60:02d}\n"
+            f"обновлено {dt.datetime.now():%H:%M:%S}")
 
 
 def _handle_stop(sid: str) -> None:
