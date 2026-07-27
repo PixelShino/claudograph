@@ -1,7 +1,7 @@
 import importlib.util
 import pathlib
 
-p = pathlib.Path.home() / ".claude" / "tg-bridge" / "stop-notify.py"
+p = pathlib.Path.home() / ".claude" / "claph" / "stop-notify.py"
 spec = importlib.util.spec_from_file_location("sn", p)
 sn = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(sn)
@@ -20,23 +20,23 @@ def T(s):
 
 
 BASH = {"type": "tool_use", "name": "Bash", "input": {}}
-SEND_BTN = {"type": "tool_use", "name": "mcp__tg-bridge__send",
+SEND_BTN = {"type": "tool_use", "name": "mcp__claph__send",
             "input": {"text": "выбор", "buttons": [{"key": "a", "label": "A"}]}}
-SEND_PLAIN = {"type": "tool_use", "name": "mcp__tg-bridge__send",
+SEND_PLAIN = {"type": "tool_use", "name": "mcp__claph__send",
               "input": {"text": "взял в работу"}}
 # The answer itself, sent by hand — not a status ping.
-SEND_ANSWER = {"type": "tool_use", "name": "mcp__tg-bridge__send",
+SEND_ANSWER = {"type": "tool_use", "name": "mcp__claph__send",
                "input": {"text": "Переделал. Ты прав был по сути: " + "и" * 900}}
-SEND_PHOTOS = {"type": "tool_use", "name": "mcp__tg-bridge__send_album",
+SEND_PHOTOS = {"type": "tool_use", "name": "mcp__claph__send_album",
                "input": {"paths": ["a.png", "b.png"], "caption": "скрины"}}
 
 
 READ = {"type": "tool_use", "name": "Read", "input": {}}
-REACT = {"type": "tool_use", "name": "mcp__tg-bridge__react",
+REACT = {"type": "tool_use", "name": "mcp__claph__react",
          "input": {"message_id": "1", "emoji": "👍"}}
 # The chat lives in Telegram, so a SHORT full answer goes out via `send` and the
 # terminal text just restates it — under PING_MAX and before the wrap-up text.
-SEND_SHORT_ANSWER = {"type": "tool_use", "name": "mcp__tg-bridge__send",
+SEND_SHORT_ANSWER = {"type": "tool_use", "name": "mcp__claph__send",
                      "input": {"text": "Тут я. Docker поднят, seerr живой, D: 145 ГБ."}}
 
 

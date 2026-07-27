@@ -1,4 +1,4 @@
-"""Send Telegram notifications through the local tg-bridge daemon.
+"""Send Telegram notifications through the local claph daemon.
 
 The hooks used to open their OWN connection to api.telegram.org — a second
 transport with its own token, retry loop, thread lookup and rich/plain fallback
@@ -19,9 +19,9 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-PORT = os.environ.get("TG_BRIDGE_PORT", "8787")
+PORT = os.environ.get("CLAPH_PORT", "8787")
 NOTIFY_URL = f"http://127.0.0.1:{PORT}/notify"
-SECRET_FILE = Path.home() / ".claude" / "tg-bridge" / "state" / "daemon.secret"
+SECRET_FILE = Path.home() / ".claude" / "claph" / "state" / "daemon.secret"
 
 
 def notify(**body) -> dict | None:

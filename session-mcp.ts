@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * tg-bridge session-mcp — one per Claude Code session (tab).
+ * claph session-mcp — one per Claude Code session (tab).
  *
  * Spawned by Claude Code as a stdio MCP server. On startup it ensures the
  * shared daemon is running, registers to get a short `handle`, then long-polls
@@ -39,7 +39,10 @@ function emitChannel(method: string, params: Record<string, unknown>): void {
 }
 
 const DAEMON_PATH = fileURLToPath(new URL('./daemon.ts', import.meta.url))
-const LABEL = process.env.TG_BRIDGE_LABEL || basename(process.cwd())
+// TG_BRIDGE_LABEL is the pre-rename name: launchers already export it, and a tab
+// that suddenly loses its label falls back to the cwd basename and creates a
+// SECOND Telegram topic. Keep reading it until the launchers are updated.
+const LABEL = process.env.CLAPH_LABEL || process.env.TG_BRIDGE_LABEL || basename(process.cwd())
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 
@@ -81,7 +84,7 @@ async function api(path: string, body: unknown): Promise<any> {
 // --- MCP server -----------------------------------------------------------
 
 const mcp = new Server(
-  { name: 'tg-bridge', version: '0.1.0' },
+  { name: 'claph', version: '0.1.0' },
   {
     capabilities: {
       tools: {},
@@ -316,7 +319,7 @@ async function connect(): Promise<void> {
   // must not receive the user's inbound messages — see the daemon's routing.
   const child = process.env.CLAUDE_CODE_CHILD_SESSION === '1'
   handle = (await api('/register', { label: LABEL, child })).handle
-  process.stderr.write(`tg-bridge session: registered as ${handle} (${LABEL})\n`)
+  process.stderr.write(`claph session: registered as ${handle} (${LABEL})\n`)
   // Ensure this tab has a native thread; the daemon creates-or-reuses it by label.
   // On failure (Threaded Mode off) threadId stays undefined -> flat-chat fallback.
   try {
@@ -343,6 +346,6 @@ process.on('SIGTERM', shutdown)
 process.on('SIGINT', shutdown)
 
 main().catch(err => {
-  process.stderr.write(`tg-bridge session: fatal ${err}\n`)
+  process.stderr.write(`claph session: fatal ${err}\n`)
   process.exit(1)
 })

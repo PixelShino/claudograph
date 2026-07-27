@@ -96,7 +96,7 @@ Three moving parts:
 
 ## Setup
 
-From zero to a working bridge. Paths below assume the repo lives at `~/.claude/claudograph` — adjust if you cloned elsewhere.
+From zero to a working bridge. Paths below assume the repo lives at `~/.claude/claph` — adjust if you cloned elsewhere.
 
 ### 1. Create a bot and get its token
 
@@ -105,8 +105,8 @@ In Telegram, message [@BotFather](https://t.me/botfather) → `/newbot` → foll
 ### 2. Clone & install
 
 ```bash
-git clone https://github.com/PixelShino/claudograph ~/.claude/claudograph
-cd ~/.claude/claudograph
+git clone https://github.com/PixelShino/claudograph ~/.claude/claph
+cd ~/.claude/claph
 bun install
 ```
 
@@ -129,7 +129,7 @@ Only user ids in `allowFrom` may talk to the bot — everyone else is ignored. *
 ### 4. Register the MCP server (once, user-scope)
 
 ```bash
-claude mcp add claudograph -s user -- bun "~/.claude/claudograph/session-mcp.ts"
+claude mcp add claudograph -s user -- bun "~/.claude/claph/session-mcp.ts"
 ```
 
 This is picked up by both the CLI and the VS Code extension. To give a tab a fixed name (and its own topic), add an env var at launch — see [Native threads](#native-threads-one-topic-per-tab).
@@ -217,13 +217,13 @@ You just talk to the bot. Text routes to the right tab; tapping a button returns
 
 ## Native threads (one topic per tab)
 
-Each tab maps to a Telegram topic keyed by a **label** = `TG_BRIDGE_LABEL` env var, or the working-directory name if unset. The daemon creates-or-reuses the topic on start and writes `state/threads.json`; the hooks read it to post into the right topic.
+Each tab maps to a Telegram topic keyed by a **label** = `CLAPH_LABEL` env var, or the working-directory name if unset. The daemon creates-or-reuses the topic on start and writes `state/threads.json`; the hooks read it to post into the right topic.
 
 - **One tab per project** → the folder name is the label automatically. Nothing to set.
 - **Two tabs in the same repo** → give them distinct labels at launch so they get separate topics:
   ```bash
-  TG_BRIDGE_LABEL=chat claude          # bash
-  $env:TG_BRIDGE_LABEL='chat'; claude  # PowerShell
+  CLAPH_LABEL=chat claude          # bash
+  $env:CLAPH_LABEL='chat'; claude  # PowerShell
   ```
   Without distinct labels, same-repo tabs **share** one topic (by design). Git worktrees differ by path, so they split automatically.
 - **Closing a tab** → its topic goes 💤 *idle* when the last tab of that label closes; history is kept, nothing is deleted. Reopening the same label reuses the same topic (🟢 active). No duplicate topics.

@@ -1,4 +1,4 @@
-# tg-bridge · Native Telegram Threads — Design Spec
+# claph · Native Telegram Threads — Design Spec
 
 **Дата:** 2026-07-18
 **Статус:** дизайн одобрен, ждёт плана реализации
@@ -23,9 +23,9 @@ threads` = ON). Эмпирически проверено: `createForumTopic` н
 `session-mcp`, **и** хуки — это **унаследованные env launch-шелла + `cwd`**. Поэтому
 слот-пул с «детектом живости» (прошлая версия) заменён на стабильный **label-ключ**.
 
-- **Ключ вкладки = `TG_BRIDGE_LABEL` env, иначе `basename(cwd)`.** Вычисляется
-  ОДИНАКОВО в `session-mcp` (TS, уже так делает: `process.env.TG_BRIDGE_LABEL ||
-  basename(process.cwd())`) и в хуках (Python: `os.environ.get('TG_BRIDGE_LABEL')`
+- **Ключ вкладки = `CLAPH_LABEL` env, иначе `basename(cwd)`.** Вычисляется
+  ОДИНАКОВО в `session-mcp` (TS, уже так делает: `process.env.CLAPH_LABEL ||
+  basename(process.cwd())`) и в хуках (Python: `os.environ.get('CLAPH_LABEL')`
   иначе `basename(payload.cwd)`). Общий, стабильный, переживает рестарты.
 - **Маппинг `label → message_thread_id`** персистится в `threads.json`.
 - **Переоткрыл вкладку с тем же label → тот же тред.** Дубли не плодятся —
@@ -33,7 +33,7 @@ threads` = ON). Эмпирически проверено: `createForumTopic` н
 - **Одна вкладка/репо** → label = имя папки авто, из коробки.
 - **Worktree** → свой `cwd` → свой label авто (можно добавить `⑂ ветка` в
   отображаемое имя темы, но ключ = basename пути worktree).
-- **Две вкладки одного репо:** пользователь задаёт разные `TG_BRIDGE_LABEL`
+- **Две вкладки одного репо:** пользователь задаёт разные `CLAPH_LABEL`
   (`работа`/`чат`) при запуске из терминала → разные треды по всем каналам. Без
   этого — делят один тред (осознанный выбор, не баг).
 - **Создание треда:** `createForumTopic(chat_id, name, icon_color?)` — работает на
@@ -98,7 +98,7 @@ threads` = ON). Эмпирически проверено: `createForumTopic` н
 - daemon пишет `threads.json`: `{ "<label>": {thread_id, name, status, ts} }` при
   `/ensure-thread`.
 - Хуки `stop-notify.py` / `progress-notify.py` вычисляют свой label
-  (`os.environ.get('TG_BRIDGE_LABEL')` иначе `basename(payload['cwd'])`), читают
+  (`os.environ.get('CLAPH_LABEL')` иначе `basename(payload['cwd'])`), читают
   `threads.json[label].thread_id` и добавляют `message_thread_id` во все исходящие.
 - Если `threads.json` нет записи для label (daemon ещё не создал тред / Threaded
   Mode выкл) → хук шлёт **без** `message_thread_id` (fallback на плоский чат).

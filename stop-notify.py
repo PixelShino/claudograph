@@ -29,10 +29,10 @@ import bridge_client  # noqa: E402
 
 HOME = Path.home()
 TG_DIR = HOME / ".claude" / "channels" / "telegram"
-LOG = HOME / ".claude" / "tg-bridge" / "state" / "stop-notify.log"
+LOG = HOME / ".claude" / "claph" / "state" / "stop-notify.log"
 FULL_AUTO = HOME / ".claude" / "state" / "full-auto.json"  # armed by the my-full-auto skill
 ATTEMPTS = 3  # the VPN drops TLS at random; one shot silently loses the ping
-THREADS_FILE = HOME / ".claude" / "tg-bridge" / "state" / "threads.json"
+THREADS_FILE = HOME / ".claude" / "claph" / "state" / "threads.json"
 PLAIN_LIMIT = 4096  # Telegram plain-send hard cap (a native Rich Message holds 32768)
 SUMMARY_SHORT = 600  # answers at most this long show whole; longer -> summary + <details>
 PING_MAX = 400  # a plain send longer than this is the answer itself, not a status ping
@@ -58,7 +58,8 @@ def _blocks(rec: dict) -> list[dict]:
 
 def _label(payload: dict) -> str:
     """This tab's stable key — same rule session-mcp uses, so they agree on a thread."""
-    env = (os.environ.get("TG_BRIDGE_LABEL") or "").strip()
+    # TG_BRIDGE_LABEL: pre-rename name still exported by existing launchers.
+    env = (os.environ.get("CLAPH_LABEL") or os.environ.get("TG_BRIDGE_LABEL") or "").strip()
     return env or Path(payload.get("cwd") or ".").name
 
 
@@ -132,16 +133,20 @@ def _last_answer_index(records: list[dict], start: int) -> int:
 
 
 def _is_bridge_send(b: dict) -> bool:
-    """A tg-bridge `send*` tool call (a NEW Telegram message — text, photo or
+    """A claph `send*` tool call (a NEW Telegram message — text, photo or
     album). react/edit/rename don't create a message, so they never duplicate."""
-    return b.get("type") == "tool_use" and "tg-bridge__send" in (b.get("name") or "")
+    # `tg-bridge__send` is the pre-rename tool name: tabs started before the rename
+    # keep it until they restart, and missing it would silently double-post there.
+    name = b.get("name") or ""
+    return b.get("type") == "tool_use" and ("claph__send" in name or "tg-bridge__send" in name)
 
 
 def _is_text_send(b: dict) -> bool:
     """`send` proper. A photo/album carries an attachment, not the turn's answer:
     screenshots plus a written result are two different things, so media alone
     must never suppress the mirror."""
-    return _is_bridge_send(b) and (b.get("name") or "").endswith("tg-bridge__send")
+    name = b.get("name") or ""
+    return _is_bridge_send(b) and (name.endswith("claph__send") or name.endswith("tg-bridge__send"))
 
 
 def _send_body(b: dict) -> str:
@@ -151,8 +156,9 @@ def _send_body(b: dict) -> str:
 
 
 def _is_bridge_tool(b: dict) -> bool:
-    """Any tg-bridge tool call (send/edit/react/rename) — messaging, not work."""
-    return b.get("type") == "tool_use" and "tg-bridge__" in (b.get("name") or "")
+    """Any claph tool call (send/edit/react/rename) — messaging, not work."""
+    name = b.get("name") or ""
+    return b.get("type") == "tool_use" and ("claph__" in name or "tg-bridge__" in name)
 
 
 def _ended_with_ping(records: list[dict], start: int) -> bool:

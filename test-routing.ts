@@ -19,7 +19,7 @@ import { join } from 'node:path'
 // test daemon writes state/daemon.pid on boot: pointed at the live dir it
 // overwrote the RUNNING daemon's pid file, and whoever read it next killed the
 // wrong process (or nothing at all).
-process.env.TG_BRIDGE_HOME = mkdtempSync(join(tmpdir(), 'tgb-routing-'))
+process.env.CLAPH_HOME = mkdtempSync(join(tmpdir(), 'tgb-routing-'))
 const { readSecret } = await import('./shared.ts')
 
 const PORT = 8799
@@ -32,9 +32,9 @@ const child = spawn('bun', [DAEMON], {
   windowsHide: true,
   env: {
     ...process.env,
-    TG_BRIDGE_TEST: '1',
-    TG_BRIDGE_PORT: String(PORT),
-    TG_BRIDGE_HOME: process.env.TG_BRIDGE_HOME,
+    CLAPH_TEST: '1',
+    CLAPH_PORT: String(PORT),
+    CLAPH_HOME: process.env.CLAPH_HOME,
     TELEGRAM_BOT_TOKEN: '111111:AAdummydummydummydummydummydummydum',
     TELEGRAM_STATE_DIR: process.env.TMPDIR ?? process.env.TEMP ?? '.', // empty allowlist (no access.json here)
   },

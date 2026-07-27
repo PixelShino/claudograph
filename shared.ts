@@ -1,5 +1,5 @@
 /**
- * Shared config + protocol types for the tg-bridge daemon and session-mcp.
+ * Shared config + protocol types for the claph daemon and session-mcp.
  *
  * Token and allowlist are REUSED from the official telegram plugin's state
  * (~/.claude/channels/telegram) so no re-pairing is needed — our bridge simply
@@ -18,16 +18,16 @@ export const TG_STATE_DIR = process.env.TELEGRAM_STATE_DIR ?? join(HOME, '.claud
 export const TG_ENV_FILE = join(TG_STATE_DIR, '.env')
 export const TG_ACCESS_FILE = join(TG_STATE_DIR, 'access.json')
 
-// Our own state. TG_BRIDGE_HOME redirects it (tests point it at a temp dir so
+// Our own state. CLAPH_HOME redirects it (tests point it at a temp dir so
 // they never touch the live threads.json of a running bridge).
-export const BRIDGE_DIR = process.env.TG_BRIDGE_HOME ?? join(HOME, '.claude', 'tg-bridge')
+export const BRIDGE_DIR = process.env.CLAPH_HOME ?? join(HOME, '.claude', 'claph')
 export const STATE_DIR = join(BRIDGE_DIR, 'state')
 export const SECRET_FILE = join(STATE_DIR, 'daemon.secret')
 export const DAEMON_PID = join(STATE_DIR, 'daemon.pid')
 export const INBOX_DIR = join(STATE_DIR, 'inbox')
 
 export const HOST = '127.0.0.1'
-export const PORT = Number(process.env.TG_BRIDGE_PORT ?? 8787)
+export const PORT = Number(process.env.CLAPH_PORT ?? 8787)
 export const BASE_URL = `http://${HOST}:${PORT}`
 
 export const CALLBACK_MAX = 64 // Telegram hard limit on callback_data bytes.
@@ -91,7 +91,7 @@ export type ThreadStatus = 'active' | 'idle'
 export type ThreadRecord = { thread_id: number; name: string; status: ThreadStatus; ts: number }
 export type ThreadsFile = Record<string, ThreadRecord>
 
-/** A tab's stable key: explicit TG_BRIDGE_LABEL, else the cwd's basename.
+/** A tab's stable key: explicit CLAPH_LABEL, else the cwd's basename.
  *  session-mcp and the hooks MUST derive this the same way to agree on a thread. */
 export function labelKey(cwd: string, envLabel?: string): string {
   const e = (envLabel ?? '').trim()

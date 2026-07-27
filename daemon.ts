@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * tg-bridge daemon — the single, shared process.
+ * claph daemon — the single, shared process.
  *
  * Owns the one getUpdates poller Telegram allows per token, and exposes a
  * loopback HTTP API so any number of Claude Code sessions (session-mcp
@@ -164,8 +164,8 @@ async function handle(req: Request): Promise<Response> {
   })
 
   // Test-only: inject an event straight into a session's queue to verify
-  // routing isolation without touching Telegram. Off unless TG_BRIDGE_TEST=1.
-  if (process.env.TG_BRIDGE_TEST === '1' && path === '/test/push' && req.method === 'POST') {
+  // routing isolation without touching Telegram. Off unless CLAPH_TEST=1.
+  if (process.env.CLAPH_TEST === '1' && path === '/test/push' && req.method === 'POST') {
     const { handle: h, event } = (await req.json()) as { handle: string; event: PollEvent }
     const s = sessions.get(h)
     if (!s) return json({ error: 'unknown handle' }, 404)
@@ -751,7 +751,7 @@ async function routeText(
   })
 }
 
-bot.catch(err => process.stderr.write(`tg-bridge daemon: handler error: ${err.error}\n`))
+bot.catch(err => process.stderr.write(`claph daemon: handler error: ${err.error}\n`))
 
 // --- lifecycle ------------------------------------------------------------
 
@@ -760,12 +760,12 @@ try {
   server = Bun.serve({ hostname: HOST, port: PORT, fetch: handle, idleTimeout: 60 })
 } catch (err) {
   // Port already bound → another daemon is live. Nothing to do.
-  process.stderr.write(`tg-bridge daemon: port ${PORT} busy (${err}) — assuming another daemon runs. Exiting.\n`)
+  process.stderr.write(`claph daemon: port ${PORT} busy (${err}) — assuming another daemon runs. Exiting.\n`)
   process.exit(0)
 }
 mkdirSync(join(DAEMON_PID, '..'), { recursive: true })
 writeFileSync(DAEMON_PID, String(process.pid))
-process.stderr.write(`tg-bridge daemon: http on ${HOST}:${PORT}, pid=${process.pid}\n`)
+process.stderr.write(`claph daemon: http on ${HOST}:${PORT}, pid=${process.pid}\n`)
 
 let shuttingDown = false
 function shutdown(): void {
@@ -785,7 +785,7 @@ void (async () => {
   for (let attempt = 1; ; attempt++) {
     try {
       await bot.start({
-        onStart: info => { attempt = 0; polling = true; lastPollError = ''; process.stderr.write(`tg-bridge daemon: polling as @${info.username}\n`) },
+        onStart: info => { attempt = 0; polling = true; lastPollError = ''; process.stderr.write(`claph daemon: polling as @${info.username}\n`) },
       })
       if (shuttingDown) return
       // bot.start() resolved WITHOUT a shutdown → the long-poll loop ended on
@@ -793,7 +793,7 @@ void (async () => {
       // but never receiving). Fall through to restart polling.
       polling = false
       lastPollError = 'poll loop ended unexpectedly — restarting'
-      process.stderr.write('tg-bridge daemon: poll loop ended unexpectedly, restarting\n')
+      process.stderr.write('claph daemon: poll loop ended unexpectedly, restarting\n')
       await new Promise(r => setTimeout(r, 1000))
     } catch (err) {
       if (shuttingDown) return
@@ -803,7 +803,7 @@ void (async () => {
       lastPollError = is409 ? '409 Conflict (another poller holds the token)' : String(err).slice(0, 200)
       const delay = Math.min(1000 * attempt, 15_000)
       process.stderr.write(
-        `tg-bridge daemon: ${is409 ? '409 Conflict — another poller holds the token (disable the official telegram plugin)' : `polling error: ${err}`}, retry in ${delay / 1000}s\n`,
+        `claph daemon: ${is409 ? '409 Conflict — another poller holds the token (disable the official telegram plugin)' : `polling error: ${err}`}, retry in ${delay / 1000}s\n`,
       )
       await new Promise(r => setTimeout(r, delay))
     }

@@ -6,7 +6,7 @@
 
 ## TL;DR
 
-Пишу **обычный GFM-markdown** и отправляю с `format:'markdown'` через tg-bridge
+Пишу **обычный GFM-markdown** и отправляю с `format:'markdown'` через claph
 `send`/`edit`. Мост шлёт его как **нативный Rich Message** (`sendRichMessage`,
 Bot API 10.1+) — реальные заголовки, таблицы, списки, сворачиваемые `<details>`,
 цитаты, спойлеры, формулы. Рендерится структурно на современных клиентах.

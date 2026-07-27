@@ -1,7 +1,7 @@
 import importlib.util
 import pathlib
 
-p = pathlib.Path.home() / ".claude" / "tg-bridge" / "stop-notify.py"
+p = pathlib.Path.home() / ".claude" / "claph" / "stop-notify.py"
 spec = importlib.util.spec_from_file_location("sn", p)
 sn = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(sn)

@@ -96,7 +96,7 @@ session-mcp  session-mcp  stop-notify.py  progress-notify.py
 
 ## Установка
 
-С нуля до рабочего моста. Пути ниже предполагают, что репо лежит в `~/.claude/claudograph` — поправь, если клонировал в другое место.
+С нуля до рабочего моста. Пути ниже предполагают, что репо лежит в `~/.claude/claph` — поправь, если клонировал в другое место.
 
 ### 1. Создай бота и получи токен
 
@@ -105,8 +105,8 @@ session-mcp  session-mcp  stop-notify.py  progress-notify.py
 ### 2. Клонируй и установи
 
 ```bash
-git clone https://github.com/PixelShino/claudograph ~/.claude/claudograph
-cd ~/.claude/claudograph
+git clone https://github.com/PixelShino/claudograph ~/.claude/claph
+cd ~/.claude/claph
 bun install
 ```
 
@@ -129,7 +129,7 @@ TELEGRAM_BOT_TOKEN=123456789:AA-твой-токен
 ### 4. Пропиши MCP-сервер (один раз, user-scope)
 
 ```bash
-claude mcp add claudograph -s user -- bun "~/.claude/claudograph/session-mcp.ts"
+claude mcp add claudograph -s user -- bun "~/.claude/claph/session-mcp.ts"
 ```
 
 Подхватят и CLI, и расширение VS Code. Чтобы у вкладки было фиксированное имя (и своя тема) — задай env при запуске, см. [Нативные треды](#нативные-треды-одна-тема-на-вкладку).
@@ -217,13 +217,13 @@ claude --dangerously-load-development-channels server:claudograph
 
 ## Нативные треды (одна тема на вкладку)
 
-Каждая вкладка привязана к теме Telegram по **метке** = env `TG_BRIDGE_LABEL`, либо имени рабочей папки, если не задано. Демон создаёт-или-переиспользует тему при старте и пишет `state/threads.json`; хуки читают его, чтобы слать в нужную тему.
+Каждая вкладка привязана к теме Telegram по **метке** = env `CLAPH_LABEL`, либо имени рабочей папки, если не задано. Демон создаёт-или-переиспользует тему при старте и пишет `state/threads.json`; хуки читают его, чтобы слать в нужную тему.
 
 - **Одна вкладка на проект** → метка = имя папки автоматически. Ничего настраивать не надо.
 - **Две вкладки в одном репо** → задай им разные метки при запуске, чтобы получить разные темы:
   ```bash
-  TG_BRIDGE_LABEL=chat claude          # bash
-  $env:TG_BRIDGE_LABEL='chat'; claude  # PowerShell
+  CLAPH_LABEL=chat claude          # bash
+  $env:CLAPH_LABEL='chat'; claude  # PowerShell
   ```
   Без разных меток вкладки одного репо **делят** одну тему (by design). Git-worktree'ы отличаются путём → разделяются автоматически.
 - **Закрытие вкладки** → её тема уходит в 💤 *idle*, когда закрылась последняя вкладка этой метки; история сохраняется, ничего не удаляется. Переоткрытие той же метки переиспользует ту же тему (🟢 active). Дубли не плодятся.

@@ -33,7 +33,7 @@ import bridge_client  # noqa: E402
 
 HOME = Path.home()
 TG_DIR = HOME / ".claude" / "channels" / "telegram"
-STATE_DIR = HOME / ".claude" / "tg-bridge" / "state"
+STATE_DIR = HOME / ".claude" / "claph" / "state"
 LOG = STATE_DIR / "progress-notify.log"
 FULL_AUTO = HOME / ".claude" / "state" / "full-auto.json"  # armed by the my-full-auto skill
 
@@ -56,7 +56,8 @@ THREADS_FILE = STATE_DIR / "threads.json"
 
 def _label(payload: dict) -> str:
     """This tab's key — same rule as session-mcp/stop-notify, so they share a thread."""
-    env = (os.environ.get("TG_BRIDGE_LABEL") or "").strip()
+    # TG_BRIDGE_LABEL: pre-rename name still exported by existing launchers.
+    env = (os.environ.get("CLAPH_LABEL") or os.environ.get("TG_BRIDGE_LABEL") or "").strip()
     return env or Path(payload.get("cwd") or ".").name
 
 

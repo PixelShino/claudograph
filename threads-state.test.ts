@@ -8,11 +8,11 @@ import { join } from 'path'
 // forum topic (duplicates) and the orphaned old ones could never be flipped to
 // 💤. Redirect the state dir BEFORE importing shared.ts (dynamic import: static
 // ones are hoisted above this assignment).
-process.env.TG_BRIDGE_HOME = mkdtempSync(join(tmpdir(), 'tgb-test-'))
+process.env.CLAPH_HOME = mkdtempSync(join(tmpdir(), 'tgb-test-'))
 const { labelKey, baseName, readThreads, writeThreads, THREADS_FILE } = await import('./shared.ts')
 
 test('state dir is the temp one, never the live bridge state', () => {
-  expect(THREADS_FILE.startsWith(process.env.TG_BRIDGE_HOME!)).toBe(true)
+  expect(THREADS_FILE.startsWith(process.env.CLAPH_HOME!)).toBe(true)
 })
 
 test('labelKey prefers env label, falls back to cwd basename', () => {

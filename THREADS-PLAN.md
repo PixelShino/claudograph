@@ -1,4 +1,4 @@
-# Native Telegram Threads for tg-bridge — Implementation Plan
+# Native Telegram Threads for claph — Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -10,8 +10,8 @@
 
 ## Global Constraints
 
-- **Base dir:** `~/.claude/tg-bridge/` (outside the project repo; not committed to the SEO repo).
-- **Label key** = `process.env.TG_BRIDGE_LABEL || basename(cwd)` (TS) / `os.environ.get('TG_BRIDGE_LABEL') or basename(payload['cwd'])` (Python). Computed identically both sides.
+- **Base dir:** `~/.claude/claph/` (outside the project repo; not committed to the SEO repo).
+- **Label key** = `process.env.CLAPH_LABEL || basename(cwd)` (TS) / `os.environ.get('CLAPH_LABEL') or basename(payload['cwd'])` (Python). Computed identically both sides.
 - **threads.json format:** `{ "<label>": { "thread_id": number, "name": string, "status": "active"|"idle", "ts": number } }`. **Only the daemon writes it** (atomic: temp file + rename). Hooks read only.
 - **Rich send format:** `sendRichMessage(chat, { markdown }, extra)` / `editMessageText(chat, id, { markdown }, extra)`; direct-HTTP hooks use body `{chat_id, rich_message:{markdown}, message_thread_id?}`. Verified working (`ok:true`).
 - **Backward compat:** if a thread can't be resolved (Threaded Mode off / no record), send WITHOUT `message_thread_id` — the flat-chat behavior must still work.
@@ -24,8 +24,8 @@
 ### Task 1: `shared.ts` — threads state module
 
 **Files:**
-- Modify: `~/.claude/tg-bridge/shared.ts` (add exports near other `STATE_DIR` constants)
-- Test: `~/.claude/tg-bridge/threads-state.test.ts` (new)
+- Modify: `~/.claude/claph/shared.ts` (add exports near other `STATE_DIR` constants)
+- Test: `~/.claude/claph/threads-state.test.ts` (new)
 
 **Interfaces:**
 - Produces:
@@ -68,7 +68,7 @@ test('corrupt file reads as {} not throw', () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd ~/.claude/tg-bridge && bun test threads-state.test.ts`
+Run: `cd ~/.claude/claph && bun test threads-state.test.ts`
 Expected: FAIL — `labelKey`/`readThreads`/`writeThreads` not exported.
 
 - [ ] **Step 3: Implement in `shared.ts`**
@@ -104,13 +104,13 @@ export function writeThreads(t: ThreadsFile): void {
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd ~/.claude/tg-bridge && bun test threads-state.test.ts`
+Run: `cd ~/.claude/claph && bun test threads-state.test.ts`
 Expected: PASS (3 tests).
 
-- [ ] **Step 5: Commit** (only if tg-bridge is a git repo; else skip — ask user)
+- [ ] **Step 5: Commit** (only if claph is a git repo; else skip — ask user)
 
 ```bash
-cd ~/.claude/tg-bridge && git add shared.ts threads-state.test.ts && git commit -m "feat(threads): threads.json state module (labelKey/read/write)"
+cd ~/.claude/claph && git add shared.ts threads-state.test.ts && git commit -m "feat(threads): threads.json state module (labelKey/read/write)"
 ```
 
 ---
@@ -118,8 +118,8 @@ cd ~/.claude/tg-bridge && git add shared.ts threads-state.test.ts && git commit 
 ### Task 2: daemon `/ensure-thread` — create-or-reuse a thread for a label
 
 **Files:**
-- Modify: `~/.claude/tg-bridge/daemon.ts` (add route in `handle`, near `/register`; import threads helpers)
-- Test: `~/.claude/tg-bridge/ensure-thread.itest.ts` (new; **integration — hits real Bot API**, run manually)
+- Modify: `~/.claude/claph/daemon.ts` (add route in `handle`, near `/register`; import threads helpers)
+- Test: `~/.claude/claph/ensure-thread.itest.ts` (new; **integration — hits real Bot API**, run manually)
 
 **Interfaces:**
 - Consumes: `readThreads`, `writeThreads`, `labelKey`, `ThreadRecord` (Task 1); `loadAllowFrom`, `bot` (existing).
@@ -173,13 +173,13 @@ console.log('OK: create then reuse returns same thread_id')
 
 - [ ] **Step 3: Run it**
 
-Run: `cd ~/.claude/tg-bridge && SEC=$(cat state/daemon.secret) bun ensure-thread.itest.ts`
+Run: `cd ~/.claude/claph && SEC=$(cat state/daemon.secret) bun ensure-thread.itest.ts`
 Expected: `first` and `reuse` print the same `thread_id`; "OK" printed; a topic `🟢 itest-label` appears in the bot. Clean up after: delete that topic manually or via `deleteForumTopic`.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-cd ~/.claude/tg-bridge && git add daemon.ts ensure-thread.itest.ts && git commit -m "feat(threads): daemon /ensure-thread create-or-reuse by label"
+cd ~/.claude/claph && git add daemon.ts ensure-thread.itest.ts && git commit -m "feat(threads): daemon /ensure-thread create-or-reuse by label"
 ```
 
 ---
@@ -187,7 +187,7 @@ cd ~/.claude/tg-bridge && git add daemon.ts ensure-thread.itest.ts && git commit
 ### Task 3: daemon send/edit carry `message_thread_id`
 
 **Files:**
-- Modify: `~/.claude/tg-bridge/daemon.ts` (`/send`, `/edit` route bodies; `sendToUser`, `deliverClassic`, `editMessage`, `sendMessage` signatures)
+- Modify: `~/.claude/claph/daemon.ts` (`/send`, `/edit` route bodies; `sendToUser`, `deliverClassic`, `editMessage`, `sendMessage` signatures)
 
 **Interfaces:**
 - Consumes: existing `sendToUser(handle, text, buttons, reply_to, format)`.
@@ -213,7 +213,7 @@ For `/edit`: add `message_thread_id?` to the body type and pass to `editMessage(
 
 Run (daemon up, reuse `itest-label` thread_id from Task 2, e.g. via `/send`):
 ```bash
-cd ~/.claude/tg-bridge
+cd ~/.claude/claph
 TID=$(SEC=$(cat state/daemon.secret) bun -e 'const t=(await (await fetch("http://127.0.0.1:8787/ensure-thread",{method:"POST",headers:{"content-type":"application/json","x-bridge-secret":process.env.SEC},body:JSON.stringify({label:"itest-label"})})).json()).thread_id; console.log(t)')
 # register a handle, then /send with message_thread_id: TID, and confirm it lands in the topic (is_topic_message)
 ```
@@ -222,7 +222,7 @@ Expected: message appears inside the `itest-label` topic, not the flat chat.
 - [ ] **Step 3: Commit**
 
 ```bash
-cd ~/.claude/tg-bridge && git add daemon.ts && git commit -m "feat(threads): daemon send/edit carry message_thread_id"
+cd ~/.claude/claph && git add daemon.ts && git commit -m "feat(threads): daemon send/edit carry message_thread_id"
 ```
 
 ---
@@ -230,7 +230,7 @@ cd ~/.claude/tg-bridge && git add daemon.ts && git commit -m "feat(threads): dae
 ### Task 4: `session-mcp` ensures its thread + forwards thread_id + `rename_thread` tool
 
 **Files:**
-- Modify: `~/.claude/tg-bridge/session-mcp.ts` (after `register`; in send/edit tool handlers; add tool)
+- Modify: `~/.claude/claph/session-mcp.ts` (after `register`; in send/edit tool handlers; add tool)
 
 **Interfaces:**
 - Consumes: `/ensure-thread` (Task 2), `/send`+`/edit` with `message_thread_id` (Task 3), `/rename-thread` (Task 6).
@@ -262,7 +262,7 @@ Restart one tab; confirm in the bot a topic `🟢 <foldername>` appears and this
 - [ ] **Step 5: Commit**
 
 ```bash
-cd ~/.claude/tg-bridge && git add session-mcp.ts && git commit -m "feat(threads): session-mcp ensures thread + forwards thread_id + rename_thread"
+cd ~/.claude/claph && git add session-mcp.ts && git commit -m "feat(threads): session-mcp ensures thread + forwards thread_id + rename_thread"
 ```
 
 ---
@@ -270,7 +270,7 @@ cd ~/.claude/tg-bridge && git add session-mcp.ts && git commit -m "feat(threads)
 ### Task 5: daemon routes inbound by `message_thread_id`
 
 **Files:**
-- Modify: `~/.claude/tg-bridge/daemon.ts` (`routeText`)
+- Modify: `~/.claude/claph/daemon.ts` (`routeText`)
 
 **Interfaces:**
 - Consumes: `readThreads`, `labelKey`, existing `sessions` map, `msgToHandle`.
@@ -302,7 +302,7 @@ From the bot, type a message **inside** a tab's topic. Confirm it reaches exactl
 - [ ] **Step 3: Commit**
 
 ```bash
-cd ~/.claude/tg-bridge && git add daemon.ts && git commit -m "feat(threads): route inbound by message_thread_id -> label -> session"
+cd ~/.claude/claph && git add daemon.ts && git commit -m "feat(threads): route inbound by message_thread_id -> label -> session"
 ```
 
 ---
@@ -310,7 +310,7 @@ cd ~/.claude/tg-bridge && git add daemon.ts && git commit -m "feat(threads): rou
 ### Task 6: daemon `/deregister` sets 💤 + `/rename-thread`
 
 **Files:**
-- Modify: `~/.claude/tg-bridge/daemon.ts` (`/deregister` block; new `/rename-thread` route)
+- Modify: `~/.claude/claph/daemon.ts` (`/deregister` block; new `/rename-thread` route)
 
 **Interfaces:**
 - Consumes: `readThreads`/`writeThreads`, `editForumTopic`, `sessions`.
@@ -358,7 +358,7 @@ Close a tab → its topic renames to `💤 …`. Reopen → back to `🟢 …`. 
 - [ ] **Step 4: Commit**
 
 ```bash
-cd ~/.claude/tg-bridge && git add daemon.ts && git commit -m "feat(threads): idle status on deregister + /rename-thread"
+cd ~/.claude/claph && git add daemon.ts && git commit -m "feat(threads): idle status on deregister + /rename-thread"
 ```
 
 ---
@@ -366,13 +366,13 @@ cd ~/.claude/tg-bridge && git add daemon.ts && git commit -m "feat(threads): idl
 ### Task 7: `stop-notify.py` — thread routing + summary/`<details>` + drop LIMIT
 
 **Files:**
-- Modify: `~/.claude/tg-bridge/stop-notify.py`
-- Test: `~/.claude/tg-bridge/test_stop_summary.py` (new; pure-function unit test)
+- Modify: `~/.claude/claph/stop-notify.py`
+- Test: `~/.claude/claph/test_stop_summary.py` (new; pure-function unit test)
 
 **Interfaces:**
 - Consumes: `threads.json` (read-only), payload `cwd`+`session_id`.
 - Produces:
-  - `_label(payload) -> str` = `os.environ.get('TG_BRIDGE_LABEL') or basename(payload.get('cwd') or '.')`
+  - `_label(payload) -> str` = `os.environ.get('CLAPH_LABEL') or basename(payload.get('cwd') or '.')`
   - `_thread_id(label) -> int | None` from `threads.json`
   - `_split_summary(answer) -> tuple[str, str|None]` — (visible summary, details-or-None) per Global Constraints rule
   - `_send(token, chat, text, thread_id)` includes `message_thread_id` when set
@@ -383,7 +383,7 @@ cd ~/.claude/tg-bridge && git add daemon.ts && git commit -m "feat(threads): idl
 ```python
 # test_stop_summary.py
 import importlib.util, pathlib
-p = pathlib.Path.home()/".claude"/"tg-bridge"/"stop-notify.py"
+p = pathlib.Path.home()/".claude"/"claph"/"stop-notify.py"
 spec = importlib.util.spec_from_file_location("sn", p)
 spec.loader.exec_module(sn := importlib.util.module_from_spec(spec))
 
@@ -408,7 +408,7 @@ for t in (test_marker, test_short_no_details, test_long_first_para_skips_heading
 
 - [ ] **Step 2: Run it (fails — `_split_summary` missing)**
 
-Run: `cd ~/.claude/tg-bridge && PYTHONUTF8=1 python test_stop_summary.py`
+Run: `cd ~/.claude/claph && PYTHONUTF8=1 python test_stop_summary.py`
 Expected: FAIL (`AttributeError: _split_summary`).
 
 - [ ] **Step 3: Implement**
@@ -418,12 +418,12 @@ import os, re
 from pathlib import Path
 
 def _label(payload):
-    return (os.environ.get("TG_BRIDGE_LABEL") or "").strip() or Path(payload.get("cwd") or ".").name
+    return (os.environ.get("CLAPH_LABEL") or "").strip() or Path(payload.get("cwd") or ".").name
 
 def _thread_id(label):
     try:
         import json
-        t = json.loads((TG_DIR.parent / "tg-bridge" / "state" / "threads.json").read_text("utf-8"))
+        t = json.loads((TG_DIR.parent / "claph" / "state" / "threads.json").read_text("utf-8"))
     except Exception:
         return None
     rec = t.get(label)
@@ -453,17 +453,17 @@ def _split_summary(answer):
 
 Then in `main()`: compute `label = _label(payload)`, `tid = _thread_id(label)`; build message as `summary` + (details ? `\n\n<details><summary>Подробнее</summary>\n\n{details}\n</details>` : ""); pass `tid` into `_send`. In `_send`, add `message_thread_id` to both the `sendRichMessage` and `sendMessage` bodies when `thread_id` is set. **Delete `LIMIT` and its truncation line.** For the plain fallback path only, cap at 4096.
 
-(Confirm `TG_DIR` path to `threads.json`: it's `~/.claude/tg-bridge/state/threads.json`. If `TG_DIR` in the hook points at `~/.claude/channels/telegram`, hardcode `Path.home()/".claude"/"tg-bridge"/"state"/"threads.json"` instead of the `.parent` trick above.)
+(Confirm `TG_DIR` path to `threads.json`: it's `~/.claude/claph/state/threads.json`. If `TG_DIR` in the hook points at `~/.claude/channels/telegram`, hardcode `Path.home()/".claude"/"claph"/"state"/"threads.json"` instead of the `.parent` trick above.)
 
 - [ ] **Step 4: Run unit test (passes)**
 
-Run: `cd ~/.claude/tg-bridge && PYTHONUTF8=1 python test_stop_summary.py`
+Run: `cd ~/.claude/claph && PYTHONUTF8=1 python test_stop_summary.py`
 Expected: `ok test_marker` / `ok test_short_no_details` / `ok test_long_first_para_skips_heading`.
 
 - [ ] **Step 5: Compile-check + commit**
 
 ```bash
-cd ~/.claude/tg-bridge && python -m py_compile stop-notify.py && git add stop-notify.py test_stop_summary.py && git commit -m "feat(threads): stop-notify routes to thread + summary/<details>, drop LIMIT"
+cd ~/.claude/claph && python -m py_compile stop-notify.py && git add stop-notify.py test_stop_summary.py && git commit -m "feat(threads): stop-notify routes to thread + summary/<details>, drop LIMIT"
 ```
 
 ---
@@ -471,7 +471,7 @@ cd ~/.claude/tg-bridge && python -m py_compile stop-notify.py && git add stop-no
 ### Task 8: `progress-notify.py` — thread routing for the progress line
 
 **Files:**
-- Modify: `~/.claude/tg-bridge/progress-notify.py`
+- Modify: `~/.claude/claph/progress-notify.py`
 
 **Interfaces:**
 - Consumes: `threads.json`, payload `cwd`; existing `_create_rich`/`_edit_rich`.
@@ -505,7 +505,7 @@ Trigger a multi-tool turn in a tab; confirm the progress line appears **inside t
 - [ ] **Step 3: Compile-check + commit**
 
 ```bash
-cd ~/.claude/tg-bridge && python -m py_compile progress-notify.py && git add progress-notify.py && git commit -m "feat(threads): progress line posts into the tab's thread"
+cd ~/.claude/claph && python -m py_compile progress-notify.py && git add progress-notify.py && git commit -m "feat(threads): progress line posts into the tab's thread"
 ```
 
 ---
@@ -529,5 +529,5 @@ cd ~/.claude/tg-bridge && python -m py_compile progress-notify.py && git add pro
 ## Known deferrals (flag to user)
 
 - **General-topic soft hint (spec §5)** — not built; a message typed in General falls back to ambiguous routing as today. Add later if it annoys.
-- **Two tabs, same repo, no `TG_BRIDGE_LABEL`** — share one thread by design.
-- **Commits** assume `~/.claude/tg-bridge` is a git repo; if not, skip commit steps (ask user first).
+- **Two tabs, same repo, no `CLAPH_LABEL`** — share one thread by design.
+- **Commits** assume `~/.claude/claph` is a git repo; if not, skip commit steps (ask user first).
