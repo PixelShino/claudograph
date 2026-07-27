@@ -132,9 +132,16 @@ def _last_answer_index(records: list[dict], start: int) -> int:
 
 
 def _is_bridge_send(b: dict) -> bool:
-    """A tg-bridge `send` tool call (a NEW Telegram message). react/edit/rename
-    don't create a message, so they never cause a duplicate."""
+    """A tg-bridge `send*` tool call (a NEW Telegram message — text, photo or
+    album). react/edit/rename don't create a message, so they never duplicate."""
     return b.get("type") == "tool_use" and "tg-bridge__send" in (b.get("name") or "")
+
+
+def _is_text_send(b: dict) -> bool:
+    """`send` proper. A photo/album carries an attachment, not the turn's answer:
+    screenshots plus a written result are two different things, so media alone
+    must never suppress the mirror."""
+    return _is_bridge_send(b) and (b.get("name") or "").endswith("tg-bridge__send")
 
 
 def _send_body(b: dict) -> str:
@@ -143,12 +150,19 @@ def _send_body(b: dict) -> str:
     return str(inp.get("text") or inp.get("caption") or "")
 
 
-def _ended_with_ping(records: list[dict], start: int, answer_at: int) -> bool:
+def _is_bridge_tool(b: dict) -> bool:
+    """Any tg-bridge tool call (send/edit/react/rename) — messaging, not work."""
+    return b.get("type") == "tool_use" and "tg-bridge__" in (b.get("name") or "")
+
+
+def _ended_with_ping(records: list[dict], start: int) -> bool:
     """True if I already delivered this turn's content to Telegram myself, so
     mirroring the final text would double-post. Three triggers:
 
-    (a) a `send` AT-OR-AFTER my final text — I closed the turn by messaging TG
-        (incl. a send in the SAME assistant message as the wrap-up text);
+    (a) NO real work after my LAST `send` — that send closed the turn, so the
+        trailing terminal text only restates what Telegram already has. A
+        «взял в работу» ping IS followed by the work it announced, so it does
+        not suppress and the real result still gets mirrored;
     (b) an INTERACTIVE `send` (buttons) ANYWHERE this turn — a button prompt is a
         self-contained message the user must tap; it usually precedes the wrap-up
         text, and mirroring on top of it is the duplicate the user hit;
@@ -156,21 +170,26 @@ def _ended_with_ping(records: list[dict], start: int, answer_at: int) -> bool:
         the answer itself, and the trailing terminal text is only a pointer to it
         («Переделал, скрины в тг.»). Mirroring it posted the same turn twice.
 
-    A SHORT plain `send` before the final text is a «взял в работу» status ping
-    and does NOT suppress — the real result still needs to reach Telegram.
+    (a) replaces an older «send at-or-after the final text» rule that missed the
+    real case: a short answer typed straight into Telegram (chat lives there) is
+    under PING_MAX and sits BEFORE the wrap-up text, so length alone read it as a
+    status ping and mirrored it — the duplicate seen on 2026-07-27.
     """
-    for rec in records[answer_at:]:                       # (a)
-        if any(_is_bridge_send(b) for b in _blocks(rec)):
-            return True
-    for rec in records[start + 1:]:                       # (b), (c)
+    worked_since_send = None  # None = no send this turn -> nothing was delivered
+    for rec in records[start + 1:]:
         for b in _blocks(rec):
-            if not _is_bridge_send(b):
+            if b.get("type") != "tool_use":
                 continue
-            if (b.get("input") or {}).get("buttons"):
-                return True
-            if len(_send_body(b)) > PING_MAX:
-                return True
-    return False
+            if _is_bridge_send(b):
+                if _is_text_send(b):
+                    worked_since_send = False
+                if (b.get("input") or {}).get("buttons"):    # (b)
+                    return True
+                if len(_send_body(b)) > PING_MAX:            # (c)
+                    return True
+            elif worked_since_send is False and not _is_bridge_tool(b):
+                worked_since_send = True
+    return worked_since_send is False                        # (a)
 
 
 def _text_at(records: list[dict], index: int) -> str:
@@ -218,7 +237,7 @@ def main() -> None:
     if answer_at < 0:
         _log("skip: no answer found")
         return
-    if _ended_with_ping(records, start, answer_at):
+    if _ended_with_ping(records, start):
         _log("skip: already delivered to Telegram this turn (explicit send)")
         return
 

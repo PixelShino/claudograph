@@ -31,10 +31,17 @@ SEND_PHOTOS = {"type": "tool_use", "name": "mcp__tg-bridge__send_album",
                "input": {"paths": ["a.png", "b.png"], "caption": "скрины"}}
 
 
+READ = {"type": "tool_use", "name": "Read", "input": {}}
+REACT = {"type": "tool_use", "name": "mcp__tg-bridge__react",
+         "input": {"message_id": "1", "emoji": "👍"}}
+# The chat lives in Telegram, so a SHORT full answer goes out via `send` and the
+# terminal text just restates it — under PING_MAX and before the wrap-up text.
+SEND_SHORT_ANSWER = {"type": "tool_use", "name": "mcp__tg-bridge__send",
+                     "input": {"text": "Тут я. Docker поднят, seerr живой, D: 145 ГБ."}}
+
+
 def _run(recs):
-    start = sn._turn_start(recs)
-    a = sn._last_answer_index(recs, start)
-    return sn._ended_with_ping(recs, start, a)
+    return sn._ended_with_ping(recs, sn._turn_start(recs))
 
 
 def test_bug_button_send_before_text_suppresses():
@@ -81,7 +88,36 @@ def test_photo_album_with_short_caption_still_mirrors():
     assert _run(recs) is False, "a short caption must not suppress the result mirror"
 
 
+def test_bug_short_answer_sent_by_hand_then_restated_suppresses():
+    # THE BUG (2026-07-27): a short answer was typed straight into Telegram, then
+    # restated as the turn's final text. Too short for the PING_MAX rule and it sat
+    # BEFORE the text, so the mirror posted the same answer a second time.
+    recs = [user(), asst(SEND_SHORT_ANSWER), asst(T("На месте. Docker и seerr работают."))]
+    assert _run(recs) is True, "a send that closed the turn must suppress the mirror"
+
+
+def test_ping_then_work_then_result_still_mirrors():
+    # The ping is followed by the work it announced -> the result must reach Telegram.
+    recs = [user(), asst(SEND_PLAIN), asst(BASH), asst(READ), asst(T("Результат."))]
+    assert _run(recs) is False
+
+
+def test_react_after_send_is_not_work():
+    # react/edit are messaging, not work: they must not re-arm the mirror.
+    recs = [user(), asst(SEND_SHORT_ANSWER), asst(REACT), asst(T("Ответил в тг."))]
+    assert _run(recs) is True
+
+
+def test_no_send_at_all_mirrors():
+    recs = [user(), asst(BASH), asst(T("Готово."))]
+    assert _run(recs) is False
+
+
 for t in (
+    test_bug_short_answer_sent_by_hand_then_restated_suppresses,
+    test_ping_then_work_then_result_still_mirrors,
+    test_react_after_send_is_not_work,
+    test_no_send_at_all_mirrors,
     test_bug_full_answer_sent_by_hand_then_pointer_text_suppresses,
     test_photo_album_with_short_caption_still_mirrors,
     test_bug_button_send_before_text_suppresses,
