@@ -21,7 +21,7 @@ import { writeFileSync, rmSync, mkdirSync } from 'fs'
 import { join } from 'path'
 import { toMarkdownV2 } from './format.ts'
 import {
-  loadToken, loadAllowFrom, ensureSecret,
+  loadToken, loadAllowFrom, loadEnvValue, ensureSecret,
   chunk, CALLBACK_MAX, CHUNK_LIMIT,
   HOST, PORT, DAEMON_PID, INBOX_DIR,
   readThreads, writeThreads, baseName,
@@ -57,6 +57,7 @@ function logInbound(e: Record<string, unknown>): void {
 }
 
 const SESSION_TTL = 70_000 // reap a session this long without /poll or /send
+const STT_MAX_BYTES = 25 * 1024 * 1024 // OpenAI's upload cap; a voice note is ~1MB/10min
 
 function newHandle(): string {
   // Short base36 handle keeps callback_data well under Telegram's 64-byte cap.
@@ -628,24 +629,72 @@ async function lockChoice(ctx: Context, outcome: string): Promise<void> {
 
 bot.on('message:text', async ctx => routeText(ctx, ctx.message.text, undefined))
 
+/** Pull a Telegram file into the inbox and return its local path. */
+async function fetchToInbox(ctx: Context, fileId: string, uniqueId: string, fallbackExt: string) {
+  const file = await ctx.api.getFile(fileId)
+  if (!file.file_path) return undefined
+  const res = await fetch(`https://api.telegram.org/file/bot${TOKEN}/${file.file_path}`)
+  const buf = Buffer.from(await res.arrayBuffer())
+  const ext = file.file_path.includes('.') ? file.file_path.split('.').pop()! : fallbackExt
+  const path = join(INBOX_DIR, `${Date.now()}-${uniqueId}.${ext}`)
+  mkdirSync(INBOX_DIR, { recursive: true })
+  writeFileSync(path, buf)
+  return path
+}
+
 bot.on('message:photo', async ctx => {
   const caption = ctx.message.caption ?? '(photo)'
+  const best = ctx.message.photo[ctx.message.photo.length - 1]
   await routeText(ctx, caption, async () => {
-    const photos = ctx.message.photo
-    const best = photos[photos.length - 1]
-    try {
-      const file = await ctx.api.getFile(best.file_id)
-      if (!file.file_path) return undefined
-      const res = await fetch(`https://api.telegram.org/file/bot${TOKEN}/${file.file_path}`)
-      const buf = Buffer.from(await res.arrayBuffer())
-      const ext = file.file_path.split('.').pop() ?? 'jpg'
-      const path = join(INBOX_DIR, `${Date.now()}-${best.file_unique_id}.${ext}`)
-      mkdirSync(INBOX_DIR, { recursive: true })
-      writeFileSync(path, buf)
-      return path
-    } catch { return undefined }
+    try { return await fetchToInbox(ctx, best.file_id, best.file_unique_id, 'jpg') }
+    catch { return undefined }
   })
 })
+
+// Voice notes / audio: Claude reads text, not sound, so a voice message only
+// becomes usable once transcribed. Without STT configured they used to be
+// dropped ENTIRELY (no handler at all) — the user spoke and nothing arrived.
+bot.on(['message:voice', 'message:audio', 'message:video_note'], async ctx => {
+  const media = ctx.message.voice ?? ctx.message.audio ?? ctx.message.video_note
+  if (!media) return
+  const caption = ctx.message.caption?.trim()
+  let text = '🎤 (голосовое)'
+  try {
+    if ((media.file_size ?? 0) > STT_MAX_BYTES) throw new Error('файл больше 25 МБ')
+    const path = await fetchToInbox(ctx, media.file_id, media.file_unique_id, 'ogg')
+    if (!path) throw new Error('не скачалось')
+    const said = (await transcribe(path)).trim()
+    text = said ? `🎤 ${said}` : '🎤 (голосовое: тишина)'
+  } catch (err) {
+    const why = String(err instanceof Error ? err.message : err).slice(0, 120)
+    logInbound({ kind: 'voice:failed', error: why })
+    text = `🎤 (голосовое, расшифровать не удалось: ${why})`
+  }
+  await routeText(ctx, caption ? `${text}\n\n${caption}` : text, undefined)
+})
+
+/** Transcribe via any OpenAI-compatible /audio/transcriptions endpoint.
+ *  Configured in the same channels/.env that holds the bot token:
+ *    STT_API_KEY=...   STT_BASE_URL=https://api.openai.com/v1   STT_MODEL=whisper-1 */
+async function transcribe(path: string): Promise<string> {
+  const key = loadEnvValue('STT_API_KEY')
+  if (!key) throw new Error('STT_API_KEY не задан в channels/telegram/.env')
+  const base = (loadEnvValue('STT_BASE_URL') ?? 'https://api.openai.com/v1').replace(/\/$/, '')
+  const form = new FormData()
+  // Force the .ogg name: Telegram serves voice notes as `.oga`, which some STT
+  // backends reject on extension alone even though the bytes are plain Ogg/Opus.
+  form.append('file', Bun.file(path), 'voice.ogg')
+  form.append('model', loadEnvValue('STT_MODEL') ?? 'whisper-1')
+  form.append('language', loadEnvValue('STT_LANGUAGE') ?? 'ru')
+  const res = await fetch(`${base}/audio/transcriptions`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${key}` },
+    body: form,
+    signal: AbortSignal.timeout(90_000),
+  })
+  if (!res.ok) throw new Error(`STT ${res.status}: ${(await res.text()).slice(0, 100)}`)
+  return ((await res.json()) as { text?: string }).text ?? ''
+}
 
 async function routeText(
   ctx: Context, text: string, downloadImage: (() => Promise<string | undefined>) | undefined,
@@ -666,13 +715,21 @@ async function routeText(
     const label = Object.keys(threads).find(k => threads[k].thread_id === tid)
     if (label) target = pickForLabel(label)
   }
-  // Fallback (General topic or no thread match): swipe-reply, else most-recent, flagged.
+  // Fallback (General topic or no thread match): swipe-reply, else most-recent.
   if (!target) {
     const repliedId = ctx.message?.reply_to_message?.message_id
     if (repliedId != null) target = msgToHandle.get(String(repliedId))
     if (!target || !sessions.has(target)) {
-      target = lastSendHandle && sessions.has(lastSendHandle) ? lastSendHandle : sessions.keys().next().value
-      ambiguous = true
+      // Real tabs only: a subagent or background job registers its own session and
+      // inherits the tab's label, and handing the user's message to one meant nobody
+      // ever answered it. Sorted by recency, like pickForLabel.
+      const tabs = [...sessions.values()].filter(s => !s.child).sort((a, b) => b.lastActive - a.lastActive)
+      const lastSend = lastSendHandle ? sessions.get(lastSendHandle) : undefined
+      target = (lastSend && !lastSend.child ? lastSend : tabs[0])?.handle
+      // Only ambiguous when the guess could have been a DIFFERENT tab. With one tab
+      // open there is nothing to confuse, and the flag just made every message look
+      // risky enough to re-confirm before acting.
+      ambiguous = tabs.length > 1
     }
   }
   const s = target ? sessions.get(target) : undefined

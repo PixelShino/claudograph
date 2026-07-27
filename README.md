@@ -54,6 +54,7 @@ The Telegram Bot API allows **exactly one** long-polling `getUpdates` per bot to
 - 🔘 **Real inline buttons** — send tappable choices; the tap returns to the exact tab that asked.
 - 🎨 **Native Rich Messages** — write plain GFM markdown; it renders as structured Telegram Rich Messages (headings, bordered tables, task lists, collapsible `<details>`, spoilers, `$LaTeX$`). Falls back to MarkdownV2 → plain automatically.
 - 📸 **Screenshots & images** — send a local image (e.g. a page screenshot) straight into the tab's topic.
+- 🎤 **Voice notes in** — record instead of typing: voice/audio/video notes are transcribed via any OpenAI-compatible STT endpoint and reach Claude as text. Optional; needs an `STT_API_KEY`.
 - ⏳ **Live progress line** — a single message that edits itself as tools run, so you see the work moving, not just the result.
 - ✅ **Final-answer mirror** — every turn's answer is pushed to Telegram automatically (summary + collapsible full text), no action needed.
 - 📲 **Wake on tap** — with the experimental *channels* flag, tapping a button from your phone can wake an idle terminal session.
@@ -155,11 +156,35 @@ Add to `~/.claude/settings.json` (create the `hooks` key if missing). These run 
 
 The hooks are hot-loaded — no restart needed for them to take effect.
 
-### 6. Disable the official plugin (avoid a token war)
+> **Windows:** use `pythonw` instead of `python`. `python.exe` is a console app, so
+> every hook run flashes a terminal window; `pythonw.exe` is the same interpreter
+> without one. Hooks here never write to stdout, so nothing is lost.
+
+### 6. (Optional) Voice notes — speech to text
+
+Claude reads text, not sound. Point the bridge at any OpenAI-compatible
+`/audio/transcriptions` endpoint and voice notes, audio files and video notes
+arrive as transcripts; without it they arrive as `🎤 (голосовое, расшифровать не
+удалось: …)` instead of vanishing. Add to the same `channels/telegram/.env` that
+holds the bot token:
+
+```bash
+STT_API_KEY=gsk_...                              # required
+STT_BASE_URL=https://api.groq.com/openai/v1      # default: https://api.openai.com/v1
+STT_MODEL=whisper-large-v3-turbo                 # default: whisper-1
+STT_LANGUAGE=ru                                  # default: ru
+```
+
+[Groq](https://console.groq.com/keys) has a free tier and is the fastest of the
+hosted options; OpenAI's `whisper-1` works with the defaults. Files over 25 MB are
+rejected before upload. Note that **not every OpenAI-compatible gateway proxies
+audio** — provod.ai, for one, 404s this route.
+
+### 7. Disable the official plugin (avoid a token war)
 
 Two pollers on one token fight (`409 Conflict`). In Claude Code: `/plugin` → Manage → `telegram` → **Disable**. Then restart your tabs.
 
-### 7. (Optional) Wake-on-tap
+### 8. (Optional) Wake-on-tap
 
 To let a **tap from your phone wake an idle terminal session**, launch Claude Code with the experimental channels flag:
 
@@ -169,7 +194,7 @@ claude --dangerously-load-development-channels server:claudograph
 
 ("dangerous" here only skips the research-preview allowlist.) You'll see a dim startup line confirming `Channels (experimental) messages from server:claudograph inject directly in this session`. **This only works in a terminal launch**, not the VS Code extension panel.
 
-### 8. (Optional) Native threads — Threaded Mode
+### 9. (Optional) Native threads — Threaded Mode
 
 To get **one Telegram topic per tab**, enable it in [@BotFather](https://t.me/botfather) → your bot → *Bot Settings* → *Threaded Mode* → **On** (and *Disallow users to create new threads* → On, so only the bot creates topics). Fee note: Telegram charges 15% only on Telegram Stars **purchases** made in your bot (ToS §6.2.6) — a bot that sells nothing pays nothing.
 

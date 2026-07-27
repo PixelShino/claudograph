@@ -35,17 +35,23 @@ export const CHUNK_LIMIT = 4096 // Telegram hard limit on message length.
 
 // --- token + allowlist (read from the plugin's state) ---------------------
 
-export function loadToken(): string {
-  // The channels/.env FILE is the source of truth for the Claude bot token.
-  // It must win over process.env: bun auto-loads the CWD's .env, and Claude
-  // Code runs us with CWD = the user's project, whose .env sets its OWN app-bot
-  // TELEGRAM_BOT_TOKEN. Trusting process.env would hijack us onto that bot.
+/** Read one key from the channels/.env FILE, which is the source of truth here.
+ *  It must win over process.env: bun auto-loads the CWD's .env, and Claude Code
+ *  runs us with CWD = the user's project, whose .env sets its OWN app-bot
+ *  TELEGRAM_BOT_TOKEN. Trusting process.env would hijack us onto that bot. */
+export function loadEnvValue(key: string): string | undefined {
   try {
     for (const line of readFileSync(TG_ENV_FILE, 'utf8').split('\n')) {
-      const m = line.match(/^TELEGRAM_BOT_TOKEN=(.*)$/)
+      const m = line.match(new RegExp(`^${key}=(.*)$`))
       if (m && m[1].trim()) return m[1].trim()
     }
   } catch {}
+  return undefined
+}
+
+export function loadToken(): string {
+  const fromFile = loadEnvValue('TELEGRAM_BOT_TOKEN')
+  if (fromFile) return fromFile
   if (process.env.TELEGRAM_BOT_TOKEN) return process.env.TELEGRAM_BOT_TOKEN
   throw new Error(`no TELEGRAM_BOT_TOKEN in ${TG_ENV_FILE} or env`)
 }
