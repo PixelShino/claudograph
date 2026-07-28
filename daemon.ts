@@ -737,6 +737,15 @@ async function routeText(
   logInbound({ kind: 'text:routed', handle: target, ambiguous })
 
   await bot.api.sendChatAction(String(ctx.chat.id), 'typing').catch(() => {})
+  // «Принял» the moment it lands. The tab can take a minute to answer, and the
+  // typing indicator dies well before that — a silent gap reads as a dead bridge.
+  // Done here, not by the model: an acknowledgement that depends on remembering
+  // to send it is the one that goes missing.
+  if (ctx.message?.message_id) {
+    await bot.api.setMessageReaction(String(ctx.chat.id), ctx.message.message_id, [
+      { type: 'emoji', emoji: '👀' },
+    ]).catch(() => {})
+  }
   const imagePath = downloadImage ? await downloadImage() : undefined
   push(s, {
     type: 'message',

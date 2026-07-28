@@ -57,7 +57,11 @@ async function healthy(): Promise<boolean> {
 // daemon's port bind is the single-instance lock, so racing spawns are safe.
 async function ensureDaemon(): Promise<void> {
   if (await healthy()) return
-  const child = spawn('bun', [DAEMON_PATH], { detached: true, stdio: 'ignore', windowsHide: true })
+  // `process.execPath` — the bun.exe already running us — NOT the `bun` name.
+  // On Windows `bun` on PATH is a .cmd shim: spawning it runs cmd.exe, which
+  // opens a real console window that `windowsHide` cannot suppress. Measured:
+  // shim → window either way; bun.exe + detached → no window.
+  const child = spawn(process.execPath, [DAEMON_PATH], { detached: true, stdio: 'ignore', windowsHide: true })
   child.unref()
   for (let i = 0; i < 40; i++) {
     if (await healthy()) return

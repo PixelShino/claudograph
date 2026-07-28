@@ -27,7 +27,7 @@ const BASE = `http://127.0.0.1:${PORT}`
 const DAEMON = fileURLToPath(new URL('./daemon.ts', import.meta.url))
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 
-const child = spawn('bun', [DAEMON], {
+const child = spawn(process.execPath, [DAEMON], { // bun.exe, not the console-opening shim
   stdio: 'ignore',
   windowsHide: true,
   env: {
