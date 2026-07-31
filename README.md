@@ -255,6 +255,7 @@ Python hook logic has `test_*.py` next to the hooks (run with `python test_dedup
 - `state/daemon.secret` (mode 0600) gates the loopback HTTP from other local processes.
 - Deleting a topic in Telegram leaves a stale `threads.json` record; the daemon degrades to the flat chat until the record is cleaned or the topic re-ensured.
 - Cyrillic on Windows: the hooks read stdin as UTF-8 bytes (the console codepage mangles it otherwise).
+- **One host machine per bot token.** Telegram allows a single `getUpdates` consumer, so a second machine running its own daemon on the same token loses the race: one polls, the other retries forever on `409 Conflict` and receives nothing. The daemon is per-machine, and its port bind only guards against a second daemon on the *same* host. Working from a laptop and a desktop at once needs either a second bot (its own token, its own topics) or one shared daemon the other machine reaches over the network (`CLAPH_PORT` is configurable; `HOST` is loopback by design). Switching to a webhook does not lift this on its own — Telegram delivers to exactly one URL, so multi-machine still needs a relay in front.
 
 ## Project structure
 
