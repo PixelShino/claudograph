@@ -17,13 +17,13 @@
 import { Bot, GrammyError, InlineKeyboard, InputFile } from 'grammy'
 import type { Context } from 'grammy'
 import type { ReactionTypeEmoji } from 'grammy/types'
-import { writeFileSync, rmSync, mkdirSync } from 'fs'
+import { readFileSync, writeFileSync, rmSync, mkdirSync } from 'fs'
 import { join } from 'path'
 import { toMarkdownV2 } from './format.ts'
 import {
   loadToken, loadAllowFrom, loadEnvValue, ensureSecret,
   chunk, CALLBACK_MAX, CHUNK_LIMIT,
-  HOST, PORT, DAEMON_PID, INBOX_DIR,
+  HOST, PORT, DAEMON_PID, INBOX_DIR, STATE_DIR,
   readThreads, writeThreads, baseName,
   type PollEvent, type Button,
 } from './shared.ts'
@@ -184,6 +184,110 @@ async function ensureThread(label: string, title?: string): Promise<number | und
   }
 }
 
+// --- live progress bar ----------------------------------------------------
+// ONE line per tab. The PostToolUse hook fires in the tab, in every subagent and
+// in every workflow agent — separate processes with separate session ids — and
+// keying the line by session id painted a separate bar for each, several of them
+// side by side in the same topic. Keyed by LABEL and owned by the daemon (the one
+// process that talks to Telegram) it is a single message every agent under the tab
+// advances, and there is no cross-process race left to lose.
+
+type Bar = {
+  ids: Record<string, string>
+  started: number
+  count: number
+  lastEdit: number
+  /** A create is in flight; a concurrent tick must not start a second one. */
+  creating: boolean
+}
+// Persisted, because a daemon restart mid-turn would otherwise orphan every live
+// line: the ids are lost, the next tool call paints a SECOND bar and the first one
+// sits there claiming work forever. Daemon-only writer, so no locking needed.
+const BARS_FILE = join(STATE_DIR, 'bars.json')
+
+function loadBars(): Map<string, Bar> {
+  try {
+    return new Map(Object.entries(JSON.parse(readFileSync(BARS_FILE, 'utf8')) as Record<string, Bar>))
+  } catch {
+    return new Map() // missing or corrupt -> start clean; a bar is never worth a crash
+  }
+}
+
+function saveBars(): void {
+  try {
+    writeFileSync(BARS_FILE, JSON.stringify(Object.fromEntries(bars)), { mode: 0o600 })
+  } catch {}
+}
+
+const bars = loadBars()
+
+const BAR_CELLS = 10         // a PULSE, not a percentage: total steps are unknowable
+const BAR_THROTTLE = 3_000   // Telegram throttles editMessageText below this
+const BAR_WARMUP_TOOLS = 3   // don't paint before this many tools...
+const BAR_WARMUP_MS = 10_000 // ...unless the turn has already run this long
+
+const pad2 = (n: number) => String(n).padStart(2, '0')
+
+function composeBar(label: string, tool: string, hint: string, b: Bar): string {
+  const elapsed = Math.max(0, Math.floor((Date.now() - b.started) / 1000))
+  let h = hint.trim().replace(/\s+/g, ' ')
+  if (h.length > 70) h = h.slice(0, 70).trimEnd() + '…'
+  const filled = ((b.count - 1) % BAR_CELLS) + 1
+  const cells = '▰'.repeat(filled) + '▱'.repeat(BAR_CELLS - filled)
+  const now = new Date()
+  return `### ${label}\n\n\`${cells}\`\n\n> \`${tool}\` · ${h}\n\n` +
+    `**шаг ${b.count}**\n` +
+    `таймер ${Math.floor(elapsed / 60)}:${pad2(elapsed % 60)}\n` +
+    `обновлено ${pad2(now.getHours())}:${pad2(now.getMinutes())}:${pad2(now.getSeconds())}`
+}
+
+/** One tick of a tab's live line: create it, edit it, or clear it. */
+async function liveBar(
+  body: { bar?: string; clear?: boolean; tool?: string; hint?: string; title?: string },
+): Promise<{ ok: boolean }> {
+  const label = body.bar!
+  if (body.clear) {
+    const b = bars.get(label)
+    bars.delete(label)
+    saveBars()
+    for (const [chat, mid] of Object.entries(b?.ids ?? {})) {
+      await bot.api.deleteMessage(chat, Number(mid)).catch(() => {}) // already gone is fine
+    }
+    return { ok: true }
+  }
+  const now = Date.now()
+  const b = bars.get(label) ?? { ids: {}, started: now, count: 0, lastEdit: 0, creating: false }
+  bars.set(label, b)
+  b.count++
+  saveBars()
+  if (b.creating) return { ok: true }
+  const live = Object.keys(b.ids).length > 0
+  // Quiet until the turn has some heft, so a two-tool answer never flashes a line.
+  if (!live && b.count < BAR_WARMUP_TOOLS && now - b.started < BAR_WARMUP_MS) return { ok: true }
+  if (live && now - b.lastEdit < BAR_THROTTLE) return { ok: true }
+  b.lastEdit = now
+  const text = composeBar((body.title ?? '').trim() || label, body.tool ?? '?', body.hint ?? '', b)
+  if (live) {
+    for (const [chat, mid] of Object.entries(b.ids)) {
+      await editMessage(chat, Number(mid), text, 'markdown', undefined)
+    }
+    return { ok: true }
+  }
+  b.creating = true
+  try {
+    const threadId = await ensureThread(label, body.title)
+    for (const chat of loadAllowFrom()) {
+      const sent = await deliverToChat(chat, text, 'markdown', undefined, undefined, threadId, true)
+      const last = sent[sent.length - 1]
+      if (last) b.ids[chat] = last
+    }
+  } finally {
+    b.creating = false
+    saveBars()
+  }
+  return { ok: true }
+}
+
 // --- HTTP API (loopback only, secret-gated) -------------------------------
 
 function json(body: unknown, status = 200): Response {
@@ -203,6 +307,9 @@ async function handle(req: Request): Promise<Response> {
     sessions: [...sessions.values()].map(s => ({
       handle: s.handle, label: s.label, child: s.child, queueLen: s.queue.length, waiting: !!s.waiter,
       ageMs: Date.now() - s.lastActive, routed: pickForLabel(s.label) === s.handle,
+    })),
+    bars: [...bars.entries()].map(([label, b]) => ({
+      label, ids: b.ids, count: b.count, ageMs: Date.now() - b.started,
     })),
     recentInbound,
   })
@@ -270,11 +377,14 @@ async function handle(req: Request): Promise<Response> {
       // Addressed by label, not handle: hooks live outside any session process.
       // create: {label, text} -> {ids: {chat: message_id}}
       // edit:   {label, text, ids}      delete: {ids, delete: true}
+      // bar:   {bar: label, tool, hint} -> the tab's ONE live line (see liveBar)
+      //        {bar: label, clear: true}  -> remove it
       const body = (await req.json()) as {
         label?: string; text?: string; ids?: Record<string, number>
         delete?: boolean; silent?: boolean; format?: Fmt
-        title?: string
+        bar?: string; clear?: boolean; tool?: string; hint?: string; title?: string
       }
+      if (body.bar) return json(await liveBar(body))
       const threadId = body.label ? await ensureThread(body.label, body.title) : undefined
       if (body.delete) {
         for (const [chat, mid] of Object.entries(body.ids ?? {})) {
