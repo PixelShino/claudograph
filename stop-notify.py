@@ -56,11 +56,33 @@ def _blocks(rec: dict) -> list[dict]:
     return [b for b in content if isinstance(b, dict)] if isinstance(content, list) else []
 
 
+def _job_id() -> str | None:
+    """This session's IMMUTABLE id — its job directory's name. Claude Code runs
+    many named sessions out of ONE directory, so the cwd basename no longer
+    identifies a tab; the session's `name` is no good either, since the harness
+    rewrites it (none -> auto-generated -> the user's own) and a moving routing
+    key forks a Telegram topic every time it moves. Mirrors shared.ts jobId()."""
+    d = os.environ.get("CLAUDE_JOB_DIR")
+    return (Path(d).name or None) if d else None
+
+
+def _job_title() -> str | None:
+    """The session's display name — it names the topic, it never routes."""
+    d = os.environ.get("CLAUDE_JOB_DIR")
+    if not d:
+        return None
+    try:
+        st = json.loads((Path(d) / "state.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None  # unreadable or mid-write; the topic just keeps its name
+    return (st.get("name") or "").strip() or None
+
+
 def _label(payload: dict) -> str:
     """This tab's stable key — same rule session-mcp uses, so they agree on a thread."""
     # TG_BRIDGE_LABEL: pre-rename name still exported by existing launchers.
     env = (os.environ.get("CLAPH_LABEL") or os.environ.get("TG_BRIDGE_LABEL") or "").strip()
-    return env or Path(payload.get("cwd") or ".").name
+    return env or _job_id() or Path(payload.get("cwd") or ".").name
 
 
 def _thread_id(label: str):
@@ -262,7 +284,7 @@ def main() -> None:
 
     # Preferred path: the daemon's connection (see bridge_client). The direct
     # send below stays as the fallback for when no daemon is running.
-    if bridge_client.notify(label=tab, text=text) is not None:
+    if bridge_client.notify(label=tab, title=_job_title(), text=text) is not None:
         _log(f"sent via daemon to thread={tid} ({len(text)} chars)")
         return
     _log("daemon unreachable → direct send")

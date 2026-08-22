@@ -17,8 +17,8 @@ import { z } from 'zod'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { appendFileSync } from 'node:fs'
-import { basename, join } from 'path'
-import { BASE_URL, STATE_DIR, readSecret, type PollEvent } from './shared.ts'
+import { join } from 'path'
+import { BASE_URL, STATE_DIR, readSecret, labelKey, jobTitle, readJobState, type PollEvent } from './shared.ts'
 
 // Audit trail: every channel notification we emit is appended here, so we can
 // tell "session-mcp emitted but the harness didn't wake me" from a delivery
@@ -42,7 +42,9 @@ const DAEMON_PATH = fileURLToPath(new URL('./daemon.ts', import.meta.url))
 // TG_BRIDGE_LABEL is the pre-rename name: launchers already export it, and a tab
 // that suddenly loses its label falls back to the cwd basename and creates a
 // SECOND Telegram topic. Keep reading it until the launchers are updated.
-const LABEL = process.env.CLAPH_LABEL || process.env.TG_BRIDGE_LABEL || basename(process.cwd())
+// labelKey adds the harness's own session name in between, so the many named
+// sessions Claude Code now runs out of ONE directory get one topic each.
+const LABEL = labelKey(process.cwd(), process.env.CLAPH_LABEL || process.env.TG_BRIDGE_LABEL)
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 
@@ -315,19 +317,33 @@ async function pollLoop(): Promise<void> {
 
 // --- startup / shutdown ---------------------------------------------------
 
+/** A subagent spawned by a tab, rather than the tab the user is typing in.
+ *  Both are full sessions with their own MCP server and they inherit the tab's
+ *  label, so a busy tab registers several — and handing the user's message to a
+ *  subagent means nobody ever answers it.
+ *
+ *  Not CLAUDE_CODE_CHILD_SESSION: Claude Code strips that variable before it
+ *  reaches an MCP server (verified by dumping a probe server's env with it set
+ *  explicitly in the parent), so it read false for every session, subagents
+ *  included. The job state names the tab's OWN session id instead; a session id
+ *  that is not it, under the same job directory, is something the tab spawned.
+ *  A plain tab has no job state and is assumed to be a tab, as before. */
+function isChild(): boolean {
+  const sid = process.env.CLAUDE_CODE_SESSION_ID
+  const st = readJobState()
+  if (!sid || !st) return false
+  return sid !== st.sessionId && sid !== st.resumeSessionId
+}
+
 async function connect(): Promise<void> {
   await ensureDaemon()
   SECRET = readSecret()
-  // `child`: subagents and background jobs are full sessions with their own MCP
-  // server and inherit the parent's label, so a busy tab registers many. They
-  // must not receive the user's inbound messages — see the daemon's routing.
-  const child = process.env.CLAUDE_CODE_CHILD_SESSION === '1'
-  handle = (await api('/register', { label: LABEL, child })).handle
+  handle = (await api('/register', { label: LABEL, child: isChild() })).handle
   process.stderr.write(`claph session: registered as ${handle} (${LABEL})\n`)
   // Ensure this tab has a native thread; the daemon creates-or-reuses it by label.
   // On failure (Threaded Mode off) threadId stays undefined -> flat-chat fallback.
   try {
-    const r = await api('/ensure-thread', { label: LABEL })
+    const r = await api('/ensure-thread', { label: LABEL, title: jobTitle() })
     threadId = typeof r.thread_id === 'number' ? r.thread_id : undefined
   } catch { threadId = undefined }
 }

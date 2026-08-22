@@ -140,6 +140,50 @@ function buildKeyboard(handle: string, buttons: Button[]): InlineKeyboard {
   return kb
 }
 
+// --- topics ---------------------------------------------------------------
+
+/** Create-or-reuse the forum topic for a tab label; undefined when the Bot API
+ *  refuses (Threaded Mode off, not a forum) so callers fall back to flat chat.
+ *  The daemon is the only writer of threads.json, so allocation lives here — and
+ *  the hooks reach it through /notify, which needs a topic of its own the first
+ *  time a label appears (a hook can fire before the tab's session-mcp starts).
+ *
+ *  `title` is the session's display name. The label is the session's id and never
+ *  moves, so renaming a session in the harness renames THIS topic instead of
+ *  forking a second one. A tab with no session name passes none, and the stored
+ *  name — including one set by hand via /rename-thread — is left alone. */
+async function ensureThread(label: string, title?: string): Promise<number | undefined> {
+  const wanted = (title ?? '').trim()
+  const threads = readThreads()
+  const existing = threads[label]
+  if (existing) {
+    // 🟢 covers both the wake from 💤 and a rename; one comparison decides both.
+    const display = `🟢 ${wanted || baseName(existing.name, label)}`
+    const changed = display !== existing.name
+    existing.status = 'active'; existing.ts = Date.now(); existing.name = display
+    threads[label] = existing; writeThreads(threads)
+    if (changed) {
+      try { await bot.api.editForumTopic(loadAllowFrom()[0], existing.thread_id, { name: display }) } catch {}
+    }
+    return existing.thread_id
+  }
+  const chat = loadAllowFrom()[0]
+  if (!chat) return undefined
+  const name = `🟢 ${wanted || label}`
+  try {
+    const topic = await bot.api.createForumTopic(chat, name)
+    // Re-read after the await: another ensureThread (different label) may have
+    // written during it; merging into a stale snapshot would clobber that label.
+    const fresh = readThreads()
+    fresh[label] = { thread_id: topic.message_thread_id, name, status: 'active', ts: Date.now() }
+    writeThreads(fresh)
+    return topic.message_thread_id
+  } catch (err) {
+    logInbound({ kind: 'ensure-thread:fail', label, error: String(err).slice(0, 140) })
+    return undefined
+  }
+}
+
 // --- HTTP API (loopback only, secret-gated) -------------------------------
 
 function json(body: unknown, status = 200): Response {
@@ -211,38 +255,11 @@ async function handle(req: Request): Promise<Response> {
     }
 
     if (path === '/ensure-thread' && req.method === 'POST') {
-      // Create-or-reuse the forum topic for a tab label. Only the daemon owns
-      // the Bot API and threads.json, so allocation happens here (session-mcp
-      // calls this once on startup). On any Bot API failure (Threaded Mode off,
-      // not a forum) we return no thread_id so the caller falls back to flat chat.
-      const { label } = (await req.json()) as { label: string }
-      const threads = readThreads()
-      const existing = threads[label]
-      if (existing) {
-        const wasIdle = existing.status === 'idle'
-        existing.status = 'active'; existing.ts = Date.now()
-        if (wasIdle) existing.name = `🟢 ${baseName(existing.name, label)}` // back from 💤
-        threads[label] = existing; writeThreads(threads)
-        if (wasIdle) {
-          try { await bot.api.editForumTopic(loadAllowFrom()[0], existing.thread_id, { name: existing.name }) } catch {}
-        }
-        return json({ thread_id: existing.thread_id })
-      }
-      const chat = loadAllowFrom()[0]
-      if (!chat) return json({ error: 'no allow-listed chat' }, 400)
-      const name = `🟢 ${label}`
-      try {
-        const topic = await bot.api.createForumTopic(chat, name)
-        // Re-read after the await: another /ensure-thread (different label) may have
-        // written during it; merging into a stale snapshot would clobber that label.
-        const fresh = readThreads()
-        fresh[label] = { thread_id: topic.message_thread_id, name, status: 'active', ts: Date.now() }
-        writeThreads(fresh)
-        return json({ thread_id: topic.message_thread_id })
-      } catch (err) {
-        logInbound({ kind: 'ensure-thread:fail', label, error: String(err).slice(0, 140) })
-        return json({ error: 'thread unavailable' }, 200)
-      }
+      // session-mcp calls this once on startup; the work lives in ensureThread so
+      // the hooks' /notify can allocate the same topic without duplicating it.
+      const { label, title } = (await req.json()) as { label: string; title?: string }
+      const tid = await ensureThread(label, title)
+      return tid === undefined ? json({ error: 'thread unavailable' }, 200) : json({ thread_id: tid })
     }
 
     if (path === '/notify' && req.method === 'POST') {
@@ -256,8 +273,9 @@ async function handle(req: Request): Promise<Response> {
       const body = (await req.json()) as {
         label?: string; text?: string; ids?: Record<string, number>
         delete?: boolean; silent?: boolean; format?: Fmt
+        title?: string
       }
-      const threadId = body.label ? readThreads()[body.label]?.thread_id : undefined
+      const threadId = body.label ? await ensureThread(body.label, body.title) : undefined
       if (body.delete) {
         for (const [chat, mid] of Object.entries(body.ids ?? {})) {
           await bot.api.deleteMessage(chat, mid).catch(() => {}) // already gone is fine
@@ -277,6 +295,12 @@ async function handle(req: Request): Promise<Response> {
         const last = sent[sent.length - 1] // rich = one message; classic = last chunk
         if (last) ids[chat] = last
       }
+      // A hook's message carries the turn's answer, so it is the one the user
+      // swipe-replies to. Unregistered, that reply matched no session and fell
+      // through to "whichever tab spoke last" — the feedback landed elsewhere.
+      const owner = body.label ? pickForLabel(body.label) : undefined
+      if (owner) for (const id of Object.values(ids)) msgToHandle.set(id, owner)
+      trim(msgToHandle)
       return json({ ids })
     }
 

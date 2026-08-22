@@ -91,11 +91,48 @@ export type ThreadStatus = 'active' | 'idle'
 export type ThreadRecord = { thread_id: number; name: string; status: ThreadStatus; ts: number }
 export type ThreadsFile = Record<string, ThreadRecord>
 
-/** A tab's stable key: explicit CLAPH_LABEL, else the cwd's basename.
+// --- the harness's own session identity ----------------------------------
+// Claude Code 2.1.2xx runs MANY named sessions out of ONE directory (`claude
+// --name`, `--bg`, `claude agents`), so the cwd basename stopped identifying a
+// tab: every session started from the same folder collapsed into a single
+// Telegram topic and an inbound message reached whichever of them answered last.
+// CLAUDE_JOB_DIR is inherited by every child of the session (MCP server, hooks),
+// so all of them agree on it.
+
+export type JobState = { name?: string; sessionId?: string; resumeSessionId?: string }
+
+export function readJobState(): JobState | undefined {
+  const dir = process.env.CLAUDE_JOB_DIR
+  if (!dir) return undefined
+  try {
+    return JSON.parse(readFileSync(join(dir, 'state.json'), 'utf8')) as JobState
+  } catch {
+    return undefined // unreadable or mid-write; never worth throwing over
+  }
+}
+
+/** The session's IMMUTABLE id — its job directory's name.
+ *  Deliberately not the session's `name`: the harness rewrites that (no name ->
+ *  an auto-generated one -> the user's own), and one job was observed under four
+ *  different names within minutes. A routing key that moves forks a topic every
+ *  time it moves, which is the bug this replaces. */
+export function jobId(): string | undefined {
+  const dir = process.env.CLAUDE_JOB_DIR
+  return dir ? basename(dir) || undefined : undefined
+}
+
+/** The session's display name (`claude --name`, what the session list shows).
+ *  Cosmetic only — it names the topic, it never routes. */
+export function jobTitle(): string | undefined {
+  return (readJobState()?.name ?? '').trim() || undefined
+}
+
+/** A tab's stable key: explicit CLAPH_LABEL, else the session's id, else the
+ *  cwd's basename (a plain tab, which has no job directory).
  *  session-mcp and the hooks MUST derive this the same way to agree on a thread. */
 export function labelKey(cwd: string, envLabel?: string): string {
   const e = (envLabel ?? '').trim()
-  return e || basename(cwd)
+  return e || jobId() || basename(cwd)
 }
 
 /** The topic's display name without its status emoji — a name set via

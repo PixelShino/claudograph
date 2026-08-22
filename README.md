@@ -217,15 +217,15 @@ You just talk to the bot. Text routes to the right tab; tapping a button returns
 
 ## Native threads (one topic per tab)
 
-Each tab maps to a Telegram topic keyed by a **label** = `CLAPH_LABEL` env var, or the working-directory name if unset. The daemon creates-or-reuses the topic on start and writes `state/threads.json`; the hooks read it to post into the right topic.
+Each tab maps to a Telegram topic keyed by a **label** = `CLAPH_LABEL` env var, else the session's own id when Claude Code runs it as a named session (`claude --name`, `--bg`, `claude agents`), else the working-directory name. The daemon creates-or-reuses the topic on start and writes `state/threads.json`; the hooks read it to post into the right topic.
 
-- **One tab per project** → the folder name is the label automatically. Nothing to set.
+- **Named sessions** → each gets its own topic, named after the session. Claude Code runs many of them out of one directory, so the folder name cannot tell them apart; the session's id can. Renaming a session in the session list renames its topic — the id routes, the name is only what you read.
 - **Two tabs in the same repo** → give them distinct labels at launch so they get separate topics:
   ```bash
   CLAPH_LABEL=chat claude          # bash
   $env:CLAPH_LABEL='chat'; claude  # PowerShell
   ```
-  Without distinct labels, same-repo tabs **share** one topic (by design). Git worktrees differ by path, so they split automatically.
+  Without distinct labels, same-repo tabs **share** one topic (by design). Git worktrees differ by path, so they split automatically. Named sessions never need this — they are already distinct.
 - **Closing a tab** → its topic goes 💤 *idle* when the last tab of that label closes; history is kept, nothing is deleted. Reopening the same label reuses the same topic (🟢 active). No duplicate topics.
 
 > Note: an env var must be set **at launch** (both the MCP server and the hooks read it then). The VS Code extension panel can't set per-tab env — launch from a terminal for distinct labels.
