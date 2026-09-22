@@ -834,7 +834,13 @@ async function routeText(
   ctx: Context, text: string, downloadImage: (() => Promise<string | undefined>) | undefined,
 ): Promise<void> {
   if (!ctx.from || ctx.chat?.type !== 'private') return
-  logInbound({ kind: 'text:received', from: String(ctx.from.id), sessions: sessions.size })
+  // The topic id goes in the log because Telegram's Bot API cannot list forum
+  // topics: a topic that threads.json has lost track of is otherwise invisible,
+  // and deleting one needs its id. One message in it and the id is here.
+  logInbound({
+    kind: 'text:received', from: String(ctx.from.id), sessions: sessions.size,
+    tid: (ctx.message as { message_thread_id?: number })?.message_thread_id ?? null,
+  })
   if (!loadAllowFrom().includes(String(ctx.from.id))) return
   if (sessions.size === 0) return
 
@@ -868,7 +874,7 @@ async function routeText(
   }
   const s = target ? sessions.get(target) : undefined
   if (!s) return
-  logInbound({ kind: 'text:routed', handle: target, ambiguous })
+  logInbound({ kind: 'text:routed', handle: target, label: s.label, ambiguous })
 
   await bot.api.sendChatAction(String(ctx.chat.id), 'typing').catch(() => {})
   // «Принял» the moment it lands. The tab can take a minute to answer, and the
